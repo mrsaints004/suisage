@@ -10,6 +10,8 @@
     "agent:build": "npx pnpm --filter agent build",
     "dashboard:dev": "npx pnpm --filter dashboard dev",
     "dashboard:build": "npx pnpm --filter dashboard build",
+    "mcp:dev": "npx pnpm --filter mcp-server dev",
+    "mcp:build": "npx pnpm --filter mcp-server build",
     "shared:build": "npx pnpm --filter @suisage/shared build",
     "build": "npx pnpm -r build",
     "clean": "npx pnpm -r exec rm -rf dist .next node_modules/.cache"

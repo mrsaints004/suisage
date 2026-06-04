@@ -11,10 +11,18 @@ export const TRADE_TYPE = {
 // Default agent loop interval
 export const DEFAULT_LOOP_INTERVAL_MS = 60_000;
 
-// DeepBook constants
+// DeepBook V2 constants
 export const DEEPBOOK_PACKAGE_ID = '0xdee9';
+export const FLOAT_SCALING_FACTOR = 1_000_000_000n;
 
-// Walrus endpoints (testnet)
+// DeepBook mainnet pool: SUI/wUSDC (low-fee, 0.02%)
+export const DEEPBOOK_SUI_USDC_POOL = '0x4405b50d791fd3346754e8171aaab6bc2ed26c2c46efdd033c14b30ae507ac33';
+
+// Coin types (mainnet)
+export const SUI_COIN_TYPE = '0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI';
+export const WUSDC_COIN_TYPE = '0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN';
+
+// Walrus endpoints (testnet - Walrus mainnet not yet available)
 export const WALRUS_AGGREGATOR_URL = 'https://aggregator.walrus-testnet.walrus.space';
 export const WALRUS_PUBLISHER_URL = 'https://publisher.walrus-testnet.walrus.space';
 

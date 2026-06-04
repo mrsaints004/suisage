@@ -1,20 +1,20 @@
 {
-  "name": "agent",
+  "name": "mcp-server",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "tsx src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
+    "@modelcontextprotocol/sdk": "^1.12.0",
     "@mysten/sui": "^1.21.0",
     "@mysten/deepbook": "^0.9.0",
     "@suisage/shared": "workspace:*",
     "dotenv": "^16.4.0",
-    "grammy": "^1.30.0"
+    "zod": "^3.23.0"
   },
   "devDependencies": {
     "tsx": "^4.19.0",
