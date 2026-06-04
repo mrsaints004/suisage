@@ -53,6 +53,7 @@ export async function makeDecision(
   vault: VaultState,
   recentDecisions: TradeDecision[] = [],
   memory?: AgentMemory,
+  memwalContext?: string,
 ): Promise<TradeDecision> {
   const vaultBalanceSui = Number(vault.balance) / Number(MIST_PER_SUI);
   const deployedSui = Number(vault.deployedAmount) / Number(MIST_PER_SUI);
@@ -92,7 +93,9 @@ ${memoryContext}
 
 ${recentDecisions.length > 0 ? `Recent in-memory decisions (this session):\n${recentDecisions.slice(-5).map(d => `- ${d.action} ${d.quantity} @ $${d.price.toFixed(4)} (confidence: ${d.confidence}%, ${d.marketCondition})`).join('\n')}` : 'No in-session decisions yet.'}
 
-Based on all of the above — market data, vault state, your past performance from Walrus memory, and on-chain constraints — make a trading decision. Respond with ONLY the JSON object.`;
+${memwalContext ? `\n${memwalContext}\n` : ''}
+
+Based on all of the above — market data, vault state, your past performance from Walrus memory, MemWal persistent memory (if available), and on-chain constraints — make a trading decision. Respond with ONLY the JSON object.`;
 
   try {
     const response = await anthropic.messages.create({

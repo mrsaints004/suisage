@@ -1,14 +1,21 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from '@mysten/dapp-kit';
 import { Transaction } from '@mysten/sui/transactions';
 import { Tooltip } from '../components/Tooltip';
 import { useToast } from '../components/Toast';
+import { PortfolioChart } from '../components/PortfolioChart';
 import Link from 'next/link';
 
 const VAULT_PACKAGE_ID = process.env.NEXT_PUBLIC_VAULT_PACKAGE_ID || '';
 const VAULT_OBJECT_ID = process.env.NEXT_PUBLIC_VAULT_OBJECT_ID || '';
+
+interface DepositReceiptInfo {
+  objectId: string;
+  shares: string;
+  depositedAmount: string;
+}
 
 export default function PortfolioPage() {
   const account = useCurrentAccount();
@@ -17,7 +24,6 @@ export default function PortfolioPage() {
   const { showToast } = useToast();
 
   const [depositAmount, setDepositAmount] = useState('');
-  const [withdrawShares, setWithdrawShares] = useState('');
   const [walletBalance, setWalletBalance] = useState<string | null>(null);
   const [vaultData, setVaultData] = useState<{
     balance: string;
@@ -28,21 +34,19 @@ export default function PortfolioPage() {
   const [loadingVault, setLoadingVault] = useState(false);
   const [txPending, setTxPending] = useState(false);
   const [lastTxDigest, setLastTxDigest] = useState<string | null>(null);
+  const [receipts, setReceipts] = useState<DepositReceiptInfo[]>([]);
+  const [loadingReceipts, setLoadingReceipts] = useState(false);
+  const [selectedReceipt, setSelectedReceipt] = useState<string>('');
+  const [withdrawShares, setWithdrawShares] = useState('');
 
   // Fetch wallet balance
   useEffect(() => {
-    if (!account) {
-      setWalletBalance(null);
-      return;
-    }
+    if (!account) { setWalletBalance(null); return; }
     async function fetchBalance() {
       try {
         const balance = await suiClient.getBalance({ owner: account!.address });
-        const sui = (Number(balance.totalBalance) / 1e9).toFixed(4);
-        setWalletBalance(sui);
-      } catch {
-        setWalletBalance(null);
-      }
+        setWalletBalance((Number(balance.totalBalance) / 1e9).toFixed(4));
+      } catch { setWalletBalance(null); }
     }
     fetchBalance();
     const interval = setInterval(fetchBalance, 15000);
@@ -55,22 +59,17 @@ export default function PortfolioPage() {
     async function fetchVault() {
       setLoadingVault(true);
       try {
-        const obj = await suiClient.getObject({
-          id: VAULT_OBJECT_ID,
-          options: { showContent: true },
-        });
+        const obj = await suiClient.getObject({ id: VAULT_OBJECT_ID, options: { showContent: true } });
         if (obj.data?.content && obj.data.content.dataType === 'moveObject') {
           const fields = obj.data.content.fields as Record<string, unknown>;
           setVaultData({
-            balance: ((Number(String(fields.balance ?? '0'))) / 1e9).toFixed(4),
+            balance: (Number(String(fields.balance ?? '0')) / 1e9).toFixed(4),
             totalShares: String(fields.total_shares ?? '0'),
-            deployed: ((Number(String(fields.deployed_amount ?? '0'))) / 1e9).toFixed(4),
+            deployed: (Number(String(fields.deployed_amount ?? '0')) / 1e9).toFixed(4),
             paused: Boolean(fields.paused),
           });
         }
-      } catch {
-        setVaultData(null);
-      }
+      } catch { setVaultData(null); }
       setLoadingVault(false);
     }
     fetchVault();
@@ -78,22 +77,47 @@ export default function PortfolioPage() {
     return () => clearInterval(interval);
   }, [suiClient]);
 
+  // Fetch user's DepositReceipt NFTs
+  const fetchReceipts = useCallback(async () => {
+    if (!account || !VAULT_PACKAGE_ID) return;
+    setLoadingReceipts(true);
+    try {
+      const objects = await suiClient.getOwnedObjects({
+        owner: account.address,
+        filter: { StructType: `${VAULT_PACKAGE_ID}::vault::DepositReceipt` },
+        options: { showContent: true },
+      });
+
+      const parsed: DepositReceiptInfo[] = objects.data
+        .filter((o) => o.data?.content && o.data.content.dataType === 'moveObject')
+        .map((o) => {
+          const fields = (o.data!.content as any).fields as Record<string, unknown>;
+          return {
+            objectId: o.data!.objectId,
+            shares: String(fields.shares ?? '0'),
+            depositedAmount: String(fields.deposited_amount ?? '0'),
+          };
+        });
+
+      setReceipts(parsed);
+      if (parsed.length > 0 && !selectedReceipt) {
+        setSelectedReceipt(parsed[0].objectId);
+      }
+    } catch { setReceipts([]); }
+    setLoadingReceipts(false);
+  }, [account, suiClient, selectedReceipt]);
+
+  useEffect(() => { fetchReceipts(); }, [fetchReceipts]);
+
   const handleDeposit = () => {
     if (!depositAmount || !account) return;
     const parsed = parseFloat(depositAmount);
-    if (isNaN(parsed) || parsed <= 0) {
-      showToast('Please enter a valid amount', 'error');
-      return;
-    }
-    if (!VAULT_PACKAGE_ID || !VAULT_OBJECT_ID) {
-      showToast('Vault not configured. Check NEXT_PUBLIC_VAULT_PACKAGE_ID in env.', 'error');
-      return;
-    }
+    if (isNaN(parsed) || parsed <= 0) { showToast('Enter a valid amount', 'error'); return; }
+    if (!VAULT_PACKAGE_ID || !VAULT_OBJECT_ID) { showToast('Vault not configured', 'error'); return; }
 
     setTxPending(true);
     const tx = new Transaction();
     const amountMist = BigInt(Math.floor(parsed * 1_000_000_000));
-
     const [coin] = tx.splitCoins(tx.gas, [tx.pure.u64(amountMist)]);
     tx.moveCall({
       target: `${VAULT_PACKAGE_ID}::vault::deposit`,
@@ -108,6 +132,7 @@ export default function PortfolioPage() {
           setLastTxDigest(result.digest);
           setDepositAmount('');
           showToast(`Deposited ${parsed} SUI successfully!`, 'success');
+          fetchReceipts();
         },
         onError: (error) => {
           setTxPending(false);
@@ -118,12 +143,39 @@ export default function PortfolioPage() {
   };
 
   const handleWithdraw = () => {
-    if (!withdrawShares || !account) return;
-    if (!VAULT_PACKAGE_ID || !VAULT_OBJECT_ID) {
-      showToast('Vault not configured', 'error');
-      return;
-    }
-    showToast('Withdraw requires your DepositReceipt object. Check your wallet for NFTs.', 'info');
+    if (!selectedReceipt || !withdrawShares || !account) return;
+    if (!VAULT_PACKAGE_ID || !VAULT_OBJECT_ID) { showToast('Vault not configured', 'error'); return; }
+
+    const sharesToBurn = BigInt(withdrawShares);
+    if (sharesToBurn <= BigInt(0)) { showToast('Enter shares to burn', 'error'); return; }
+
+    setTxPending(true);
+    const tx = new Transaction();
+    tx.moveCall({
+      target: `${VAULT_PACKAGE_ID}::vault::withdraw`,
+      arguments: [
+        tx.object(VAULT_OBJECT_ID),
+        tx.object(selectedReceipt),
+        tx.pure.u64(sharesToBurn),
+      ],
+    });
+
+    signAndExecute(
+      { transaction: tx as any },
+      {
+        onSuccess: (result) => {
+          setTxPending(false);
+          setLastTxDigest(result.digest);
+          setWithdrawShares('');
+          showToast('Withdrawal successful!', 'success');
+          fetchReceipts();
+        },
+        onError: (error) => {
+          setTxPending(false);
+          showToast(`Withdraw failed: ${error.message}`, 'error');
+        },
+      },
+    );
   };
 
   // Not connected state
@@ -136,34 +188,18 @@ export default function PortfolioPage() {
           <h2 className="text-xl font-semibold mb-2">Connect Your Wallet</h2>
           <p className="text-gray-400 mb-6 max-w-md mx-auto text-sm">
             Connect your Sui wallet to deposit SUI, track your shares, and manage your portfolio.
-            The AI agent will trade with pooled vault funds.
           </p>
           <p className="text-gray-600 text-xs">
             Use the &quot;Connect Wallet&quot; button in the top right corner.
           </p>
         </div>
-
-        {/* Still show vault info even without wallet */}
         {vaultData && (
           <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
             <h3 className="text-lg font-semibold mb-4">Vault Overview (Read-Only)</h3>
             <div className="grid sm:grid-cols-3 gap-4">
-              <VaultStat
-                label="Vault Balance"
-                value={vaultData.balance}
-                unit="SUI"
-              />
-              <VaultStat
-                label="Deployed to Trading"
-                value={vaultData.deployed}
-                unit="SUI"
-              />
-              <VaultStat
-                label="Status"
-                value={vaultData.paused ? 'Paused' : 'Active'}
-                unit=""
-                highlight={!vaultData.paused}
-              />
+              <VaultStat label="Vault Balance" value={vaultData.balance} unit="SUI" />
+              <VaultStat label="Deployed" value={vaultData.deployed} unit="SUI" />
+              <VaultStat label="Status" value={vaultData.paused ? 'Paused' : 'Active'} unit="" highlight={!vaultData.paused} />
             </div>
           </div>
         )}
@@ -174,6 +210,8 @@ export default function PortfolioPage() {
   const totalVaultSui = vaultData
     ? (parseFloat(vaultData.balance) + parseFloat(vaultData.deployed)).toFixed(4)
     : '--';
+
+  const selectedReceiptData = receipts.find((r) => r.objectId === selectedReceipt);
 
   return (
     <div className="space-y-8">
@@ -188,9 +226,7 @@ export default function PortfolioPage() {
           </div>
           <div className="text-right">
             <p className="text-sm text-gray-400">Wallet Balance</p>
-            <p className="text-xl font-bold">
-              {walletBalance ?? '--'} <span className="text-sm text-gray-500">SUI</span>
-            </p>
+            <p className="text-xl font-bold">{walletBalance ?? '--'} <span className="text-sm text-gray-500">SUI</span></p>
           </div>
         </div>
       </div>
@@ -211,9 +247,9 @@ export default function PortfolioPage() {
         </div>
         <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
           <p className="text-sm text-gray-400">
-            <Tooltip term="Total Shares" explanation="Total share tokens issued. Your share count determines your % of the vault." />
+            <Tooltip term="Your Shares" explanation="DepositReceipt NFTs you hold. Each represents your proportional ownership." />
           </p>
-          <p className="text-2xl font-bold">{vaultData?.totalShares ?? '--'}</p>
+          <p className="text-2xl font-bold">{receipts.length > 0 ? receipts.reduce((s, r) => s + BigInt(r.shares), BigInt(0)).toString() : '--'}</p>
         </div>
         <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
           <p className="text-sm text-gray-400">Agent Status</p>
@@ -225,11 +261,12 @@ export default function PortfolioPage() {
 
       {/* Deposit / Withdraw */}
       <div className="grid sm:grid-cols-2 gap-6">
+        {/* Deposit */}
         <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
           <h3 className="text-lg font-semibold mb-1">Deposit SUI</h3>
           <p className="text-xs text-gray-500 mb-4">
             Deposit SUI into the vault to receive{' '}
-            <Tooltip term="shares" explanation="Shares represent your proportional ownership of the vault. If you hold 10% of shares, you can withdraw 10% of total value." />
+            <Tooltip term="shares" explanation="Shares represent your proportional ownership. If you hold 10% of shares, you own 10% of the vault." />
           </p>
           <div className="space-y-4">
             <div>
@@ -245,63 +282,81 @@ export default function PortfolioPage() {
                 )}
               </div>
               <input
-                type="number"
-                min="0"
-                step="0.1"
-                value={depositAmount}
-                onChange={(e) => setDepositAmount(e.target.value)}
-                placeholder="0.0"
+                type="number" min="0" step="0.1" value={depositAmount}
+                onChange={(e) => setDepositAmount(e.target.value)} placeholder="0.0"
                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-sage-500 transition-colors"
               />
             </div>
             <button
-              onClick={handleDeposit}
-              disabled={isPending || txPending || !depositAmount}
+              onClick={handleDeposit} disabled={isPending || txPending || !depositAmount}
               className="w-full px-4 py-2.5 bg-sage-600 hover:bg-sage-700 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg font-medium transition-colors"
             >
-              {txPending ? (
-                <span className="flex items-center justify-center gap-2">
-                  <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  Confirming...
-                </span>
-              ) : (
-                'Deposit'
-              )}
+              {txPending ? <Spinner text="Confirming..." /> : 'Deposit'}
             </button>
           </div>
         </div>
 
+        {/* Withdraw */}
         <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
           <h3 className="text-lg font-semibold mb-1">Withdraw SUI</h3>
           <p className="text-xs text-gray-500 mb-4">
-            Burn your{' '}
-            <Tooltip term="DepositReceipt NFT" explanation="When you deposited, you received an NFT that proves your share ownership. You need it to withdraw." />
-            {' '}to reclaim SUI
+            Select a{' '}
+            <Tooltip term="DepositReceipt" explanation="The NFT you received when depositing. It proves your share ownership and is required to withdraw." />
+            {' '}and burn shares to reclaim SUI
           </p>
           <div className="space-y-4">
+            {/* Receipt selector */}
+            {loadingReceipts ? (
+              <p className="text-xs text-gray-500">Loading your receipts...</p>
+            ) : receipts.length === 0 ? (
+              <p className="text-xs text-gray-500">No DepositReceipt NFTs found. Deposit first to get one.</p>
+            ) : (
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Select Receipt</label>
+                <select
+                  value={selectedReceipt}
+                  onChange={(e) => setSelectedReceipt(e.target.value)}
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-sage-500"
+                >
+                  {receipts.map((r) => (
+                    <option key={r.objectId} value={r.objectId}>
+                      {r.objectId.slice(0, 10)}... ({r.shares} shares)
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             <div>
-              <label className="block text-sm text-gray-400 mb-1">Shares to burn</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-sm text-gray-400">Shares to burn</label>
+                {selectedReceiptData && (
+                  <button
+                    onClick={() => setWithdrawShares(selectedReceiptData.shares)}
+                    className="text-xs text-sage-400 hover:text-sage-300"
+                  >
+                    Max: {selectedReceiptData.shares}
+                  </button>
+                )}
+              </div>
               <input
-                type="number"
-                min="0"
-                value={withdrawShares}
-                onChange={(e) => setWithdrawShares(e.target.value)}
-                placeholder="0"
+                type="number" min="0" value={withdrawShares}
+                onChange={(e) => setWithdrawShares(e.target.value)} placeholder="0"
                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-sage-500 transition-colors"
               />
             </div>
             <button
               onClick={handleWithdraw}
-              disabled={isPending || txPending || !withdrawShares}
+              disabled={isPending || txPending || !withdrawShares || receipts.length === 0}
               className="w-full px-4 py-2.5 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 rounded-lg font-medium transition-colors"
             >
-              Withdraw
+              {txPending ? <Spinner text="Withdrawing..." /> : 'Withdraw'}
             </button>
           </div>
         </div>
       </div>
 
-      {/* Last Transaction */}
+      {/* Transaction Result */}
       {lastTxDigest && (
         <div className="bg-green-900/20 border border-green-800/50 rounded-xl p-4 flex items-center justify-between">
           <div>
@@ -310,8 +365,7 @@ export default function PortfolioPage() {
           </div>
           <a
             href={`https://suiscan.xyz/mainnet/tx/${lastTxDigest}`}
-            target="_blank"
-            rel="noopener noreferrer"
+            target="_blank" rel="noopener noreferrer"
             className="px-3 py-1.5 bg-green-800/30 hover:bg-green-800/50 text-green-400 rounded-lg text-xs transition-colors"
           >
             View on Explorer
@@ -319,34 +373,52 @@ export default function PortfolioPage() {
         </div>
       )}
 
-      {/* Vault Performance / CTA */}
+      {/* Portfolio Chart */}
       <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
-        <h3 className="text-lg font-semibold mb-4">Vault Performance</h3>
-        <div className="h-48 flex flex-col items-center justify-center text-gray-500">
-          <p className="mb-4">Performance chart populates as the agent trades</p>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold">Vault Performance</h3>
           <Link
             href="/reasoning"
-            className="px-4 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm transition-colors text-gray-300"
+            className="text-xs text-sage-400 hover:text-sage-300 transition-colors"
           >
-            View Agent Reasoning →
+            View AI Reasoning →
           </Link>
+        </div>
+        <PortfolioChart />
+      </div>
+
+      {/* Agent Info */}
+      <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
+        <h3 className="text-lg font-semibold mb-4">Agent Architecture</h3>
+        <div className="grid sm:grid-cols-3 gap-4 text-sm">
+          <div className="bg-gray-800/50 rounded-lg p-4">
+            <p className="text-sage-400 font-medium mb-1">Guardian Risk Layer</p>
+            <p className="text-gray-400 text-xs">Every trade passes 8 automated risk checks before execution. Spread, depth, slippage, concentration, cooldown, budget ceiling, confidence floor, and vault health.</p>
+          </div>
+          <div className="bg-gray-800/50 rounded-lg p-4">
+            <p className="text-sage-400 font-medium mb-1">Walrus Memory</p>
+            <p className="text-gray-400 text-xs">The agent reads its past decisions from Walrus and learns from outcomes. Win rate, patterns, and performance stats feed into each new decision.</p>
+          </div>
+          <div className="bg-gray-800/50 rounded-lg p-4">
+            <p className="text-sage-400 font-medium mb-1">On-Chain Enforcement</p>
+            <p className="text-gray-400 text-xs">Budget ceiling enforced by Move AgentCap object. Admin can revoke agent access instantly. Trade + record happen atomically in a single PTB.</p>
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-function VaultStat({
-  label,
-  value,
-  unit,
-  highlight,
-}: {
-  label: string;
-  value: string;
-  unit: string;
-  highlight?: boolean;
-}) {
+function Spinner({ text }: { text: string }) {
+  return (
+    <span className="flex items-center justify-center gap-2">
+      <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+      {text}
+    </span>
+  );
+}
+
+function VaultStat({ label, value, unit, highlight }: { label: string; value: string; unit: string; highlight?: boolean }) {
   return (
     <div>
       <p className="text-sm text-gray-400">{label}</p>

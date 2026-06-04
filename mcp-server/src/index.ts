@@ -255,6 +255,68 @@ server.tool(
   },
 );
 
+// Tool: get_agent_architecture
+server.tool(
+  'get_agent_architecture',
+  'Explain how SuiSage works — its architecture, guardian risk layer, Walrus memory, and on-chain enforcement',
+  {},
+  async () => {
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          overview: 'SuiSage is an autonomous AI trading agent on Sui that trades SUI/USDC on DeepBook with verifiable reasoning stored on Walrus.',
+          cycle: [
+            '1. Read live orderbook from DeepBook (price, spread, depth)',
+            '2. Read vault state from on-chain Vault object',
+            '3. Load agent memory from Walrus (past decisions, performance, patterns)',
+            '4. Claude AI analyzes market + memory and outputs a TradeDecision',
+            '5. Guardian risk layer validates: spread, depth, slippage, budget, cooldown',
+            '6. On-chain validation via devInspectTransactionBlock against AgentCap limits',
+            '7. Store full reasoning on Walrus (immutable, publicly auditable)',
+            '8. Execute trade + record as atomic PTB (Programmable Transaction Block)',
+          ],
+          suiPrimitives: {
+            moveObjects: 'AgentCap enforces budget ceiling, AdminCap enables revocation',
+            ptbs: 'Trade execution + on-chain recording in a single atomic transaction',
+            walrus: 'Every reasoning chain stored immutably, agent reads back for learning',
+            deepbook: 'Real limit orders on DeepBook V2 central limit orderbook',
+          },
+          guardian: {
+            checks: ['Budget ceiling', 'Spread', 'Position concentration', 'Liquidity depth', 'Confidence floor', 'Cooldown', 'Slippage', 'Vault health'],
+            description: 'Pre-trade risk validation that blocks trades failing any check',
+          },
+          tracks: ['Agentic Web', 'Walrus', 'DeepBook', 'DeFi & Payments'],
+        }, null, 2),
+      }],
+    };
+  },
+);
+
+// Tool: get_guardian_config
+server.tool(
+  'get_guardian_config',
+  'Get the current guardian risk check configuration and thresholds',
+  {},
+  async () => {
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          maxSpreadBps: 50,
+          maxPositionPct: 30,
+          minBidDepth: 100,
+          minAskDepth: 100,
+          maxSlippageBps: 100,
+          minConfidence: 30,
+          cooldownMs: 30000,
+          description: 'Trades must pass ALL checks or they are BLOCKED. Results are stored in the Walrus reasoning log for full transparency.',
+        }, null, 2),
+      }],
+    };
+  },
+);
+
 // Start the server
 async function main() {
   const transport = new StdioServerTransport();
