@@ -27,4 +27,19 @@ export const WALRUS_AGGREGATOR_URL = 'https://aggregator.walrus-testnet.walrus.s
 export const WALRUS_PUBLISHER_URL = 'https://publisher.walrus-testnet.walrus.space';
 
 // Reasoning log version
-export const REASONING_LOG_VERSION = '1.0.0';
+export const REASONING_LOG_VERSION = '2.0.0';
+
+// Guardian thresholds
+export const GUARDIAN_DEFAULTS = {
+  maxSpreadBps: 50,          // reject if spread > 50bps
+  maxPositionPct: 30,        // max 30% of vault in one trade
+  minBidDepth: 100,          // min depth to trade
+  minAskDepth: 100,
+  maxSlippageBps: 100,       // max 1% slippage
+  minConfidence: 30,         // reject if AI confidence < 30%
+  cooldownMs: 30_000,        // min 30s between trades
+} as const;
+
+// DeepBook Predict (testnet)
+export const DEEPBOOK_PREDICT_PACKAGE_ID = '0x0'; // set after testnet deploy
+export const DUSDC_COIN_TYPE = '0x0'; // dUSDC on testnet

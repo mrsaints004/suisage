@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useSuiClient } from '@mysten/dapp-kit';
+import { Tooltip } from '../components/Tooltip';
 import type { ReasoningLog, TradeAction } from '@suisage/shared';
 
 const VAULT_PACKAGE_ID = process.env.NEXT_PUBLIC_VAULT_PACKAGE_ID || '';
@@ -41,14 +42,16 @@ export default function ReasoningPage() {
   const [records, setRecords] = useState<TradeRecord[]>([]);
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
   const [reasoningData, setReasoningData] = useState<Record<string, ReasoningLog>>({});
+  const [loadingReasoning, setLoadingReasoning] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isDemo, setIsDemo] = useState(false);
 
   // Fetch trade events from chain
   useEffect(() => {
     async function fetchTradeEvents() {
       if (!VAULT_PACKAGE_ID) {
-        // Demo mode: show sample data
         setRecords(getSampleRecords());
+        setIsDemo(true);
         setLoading(false);
         return;
       }
@@ -74,10 +77,16 @@ export default function ReasoningPage() {
           };
         });
 
-        setRecords(parsed);
+        if (parsed.length === 0) {
+          setRecords(getSampleRecords());
+          setIsDemo(true);
+        } else {
+          setRecords(parsed);
+        }
       } catch (error) {
         console.error('Error fetching events:', error);
         setRecords(getSampleRecords());
+        setIsDemo(true);
       }
       setLoading(false);
     }
@@ -89,7 +98,6 @@ export default function ReasoningPage() {
   async function loadReasoning(blobId: string) {
     if (reasoningData[blobId]) return;
     if (blobId.startsWith('sample-')) {
-      // Demo mode
       setReasoningData((prev) => ({
         ...prev,
         [blobId]: getSampleReasoning(blobId),
@@ -97,6 +105,7 @@ export default function ReasoningPage() {
       return;
     }
 
+    setLoadingReasoning(blobId);
     try {
       const res = await fetch(`${WALRUS_AGGREGATOR_URL}/v1/blobs/${blobId}`);
       if (res.ok) {
@@ -106,6 +115,7 @@ export default function ReasoningPage() {
     } catch (error) {
       console.error('Error fetching reasoning:', error);
     }
+    setLoadingReasoning(null);
   }
 
   function handleExpand(index: number, blobId: string) {
@@ -122,15 +132,40 @@ export default function ReasoningPage() {
       <div>
         <h1 className="text-3xl font-bold">Reasoning Timeline</h1>
         <p className="text-gray-400 mt-2">
-          Every decision the agent makes is stored on Walrus. Click any entry to see the full reasoning chain.
+          Every decision the agent makes is stored on{' '}
+          <Tooltip term="Walrus" explanation="Walrus is decentralized blob storage on Sui. Data stored here is immutable and publicly accessible." />.
+          Click any entry to see the full reasoning chain.
         </p>
       </div>
 
+      {/* Demo mode banner */}
+      {isDemo && !loading && (
+        <div className="bg-blue-900/20 border border-blue-800/50 rounded-xl p-4 flex items-center gap-3">
+          <span className="text-blue-400 text-xl">ℹ</span>
+          <div>
+            <p className="text-sm text-blue-300 font-medium">Demo Mode</p>
+            <p className="text-xs text-gray-400">
+              Showing sample data. Once the agent starts trading and contracts are deployed, real decisions will appear here with verifiable Walrus links.
+            </p>
+          </div>
+        </div>
+      )}
+
       {loading ? (
-        <div className="text-center py-12 text-gray-400">Loading trade history...</div>
+        <div className="text-center py-16">
+          <div className="w-8 h-8 border-2 border-sage-500/30 border-t-sage-500 rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-gray-400">Loading trade history from chain...</p>
+        </div>
       ) : records.length === 0 ? (
-        <div className="text-center py-12 text-gray-400">
-          No trades recorded yet. The agent will populate this timeline as it operates.
+        <div className="text-center py-16 bg-gray-900 rounded-xl border border-gray-800">
+          <span className="text-4xl mb-4 block">🔍</span>
+          <h2 className="text-xl font-semibold mb-2">No Trades Yet</h2>
+          <p className="text-gray-400 text-sm max-w-md mx-auto mb-6">
+            The agent hasn&apos;t recorded any trades on-chain yet. Once it starts its 60-second cycle, decisions will appear here with full AI reasoning.
+          </p>
+          <p className="text-gray-600 text-xs">
+            Make sure the agent is running: <code className="bg-gray-800 px-1.5 py-0.5 rounded">npx pnpm agent:dev</code>
+          </p>
         </div>
       ) : (
         <div className="relative">
@@ -142,6 +177,7 @@ export default function ReasoningPage() {
               const action = TRADE_TYPE_MAP[record.tradeType] || 'HOLD';
               const isExpanded = expandedIndex === index;
               const reasoning = reasoningData[record.walrusBlobId];
+              const isLoadingThis = loadingReasoning === record.walrusBlobId;
               const amountSui = (Number(record.amount) / 1e9).toFixed(4);
               const priceSui = (Number(record.price) / 1e9).toFixed(4);
               const time = new Date(Number(record.timestampMs)).toLocaleString();
@@ -174,27 +210,41 @@ export default function ReasoningPage() {
                           {amountSui} SUI @ ${priceSui}
                         </span>
                       </div>
-                      <span className="text-xs text-gray-500">{time}</span>
+                      <div className="flex items-center gap-3">
+                        <span className="text-xs text-gray-500">{time}</span>
+                        <span className={`text-gray-500 transition-transform ${isExpanded ? 'rotate-180' : ''}`}>
+                          ▼
+                        </span>
+                      </div>
                     </div>
 
                     {/* Expanded content */}
                     {isExpanded && (
                       <div className="mt-4 space-y-4 border-t border-gray-700/50 pt-4">
-                        {reasoning ? (
+                        {isLoadingThis ? (
+                          <div className="flex items-center gap-3 py-4">
+                            <div className="w-5 h-5 border-2 border-sage-500/30 border-t-sage-500 rounded-full animate-spin" />
+                            <p className="text-sm text-gray-400">Fetching reasoning from Walrus...</p>
+                          </div>
+                        ) : reasoning ? (
                           <>
-                            {/* Decision */}
+                            {/* Reasoning */}
                             <div>
-                              <h4 className="text-xs font-semibold text-gray-400 uppercase mb-1">Reasoning</h4>
-                              <p className="text-sm text-gray-300">{reasoning.decision.reasoning}</p>
+                              <h4 className="text-xs font-semibold text-gray-400 uppercase mb-1">
+                                AI Reasoning
+                              </h4>
+                              <p className="text-sm text-gray-300 leading-relaxed">{reasoning.decision.reasoning}</p>
                             </div>
 
                             <div className="grid sm:grid-cols-2 gap-4">
                               <div>
-                                <h4 className="text-xs font-semibold text-gray-400 uppercase mb-1">Confidence</h4>
+                                <h4 className="text-xs font-semibold text-gray-400 uppercase mb-1">
+                                  <Tooltip term="Confidence" explanation="How confident the AI is in this decision (0-100%). Higher = more certain." />
+                                </h4>
                                 <div className="flex items-center gap-2">
                                   <div className="flex-1 h-2 bg-gray-800 rounded-full overflow-hidden">
                                     <div
-                                      className="h-full bg-sage-500 rounded-full"
+                                      className="h-full bg-sage-500 rounded-full transition-all"
                                       style={{ width: `${reasoning.decision.confidence}%` }}
                                     />
                                   </div>
@@ -202,7 +252,9 @@ export default function ReasoningPage() {
                                 </div>
                               </div>
                               <div>
-                                <h4 className="text-xs font-semibold text-gray-400 uppercase mb-1">Market Condition</h4>
+                                <h4 className="text-xs font-semibold text-gray-400 uppercase mb-1">
+                                  <Tooltip term="Market Condition" explanation="The AI's assessment of overall market sentiment at decision time." />
+                                </h4>
                                 <p className="text-sm">{reasoning.decision.marketCondition}</p>
                               </div>
                             </div>
@@ -214,27 +266,37 @@ export default function ReasoningPage() {
 
                             {/* Market Snapshot */}
                             <div>
-                              <h4 className="text-xs font-semibold text-gray-400 uppercase mb-1">Market Snapshot</h4>
-                              <div className="grid grid-cols-3 gap-2 text-xs">
-                                <div>
-                                  <span className="text-gray-500">Mid:</span> ${reasoning.marketSnapshot.midPrice.toFixed(4)}
-                                </div>
-                                <div>
-                                  <span className="text-gray-500">Spread:</span> {reasoning.marketSnapshot.spreadBps.toFixed(1)}bps
-                                </div>
-                                <div>
-                                  <span className="text-gray-500">Vol:</span> ${reasoning.marketSnapshot.volume24h.toFixed(0)}
-                                </div>
+                              <h4 className="text-xs font-semibold text-gray-400 uppercase mb-2">Market Snapshot at Decision Time</h4>
+                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                                <MiniStat label="Mid Price" value={`$${reasoning.marketSnapshot.midPrice.toFixed(4)}`} />
+                                <MiniStat label="Spread" value={`${reasoning.marketSnapshot.spreadBps.toFixed(1)} bps`} />
+                                <MiniStat label="Bid Depth" value={reasoning.marketSnapshot.bidDepth.toFixed(1)} />
+                                <MiniStat label="Ask Depth" value={reasoning.marketSnapshot.askDepth.toFixed(1)} />
                               </div>
                             </div>
 
-                            {/* Walrus reference */}
-                            <div className="text-xs text-gray-500 font-mono break-all">
-                              Walrus Blob: {record.walrusBlobId}
+                            {/* Links */}
+                            <div className="flex items-center justify-between pt-2 border-t border-gray-700/30">
+                              <div className="text-xs text-gray-500 font-mono truncate max-w-[60%]">
+                                Walrus: {record.walrusBlobId}
+                              </div>
+                              {!record.walrusBlobId.startsWith('sample-') && (
+                                <a
+                                  href={`https://suiscan.xyz/mainnet/tx/${record.txDigest}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="text-xs text-sage-400 hover:text-sage-300 transition-colors"
+                                >
+                                  View TX →
+                                </a>
+                              )}
                             </div>
                           </>
                         ) : (
-                          <p className="text-sm text-gray-400">Loading reasoning from Walrus...</p>
+                          <p className="text-sm text-gray-400 py-2">
+                            Could not load reasoning data. The Walrus blob might not be available yet.
+                          </p>
                         )}
                       </div>
                     )}
@@ -245,6 +307,15 @@ export default function ReasoningPage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="bg-gray-800/50 rounded-lg p-2">
+      <p className="text-xs text-gray-500">{label}</p>
+      <p className="text-sm font-mono">{value}</p>
     </div>
   );
 }

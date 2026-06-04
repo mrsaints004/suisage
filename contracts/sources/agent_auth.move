@@ -136,6 +136,33 @@ module suisage::agent_auth {
         suisage::vault::set_paused(vault, false);
     }
 
+    /// Revoke an agent - destroys the AgentCap (admin must own it or agent returns it)
+    public fun revoke_agent(
+        admin_cap: &AdminCap,
+        agent_cap: AgentCap,
+    ) {
+        assert!(admin_cap.vault_id == agent_cap.vault_id, ENotAuthorized);
+
+        let agent_cap_id = object::id(&agent_cap);
+        let vault_id = agent_cap.vault_id;
+
+        let AgentCap { id, vault_id: _, max_trade_size: _, max_deployment_bps: _, active: _ } = agent_cap;
+        object::delete(id);
+
+        event::emit(AgentRevokedEvent {
+            vault_id,
+            agent_cap_id,
+        });
+    }
+
+    /// Validate that a trade does not exceed agent limits (view function for pre-trade check)
+    public fun validate_trade_size(
+        agent_cap: &AgentCap,
+        amount: u64,
+    ): bool {
+        agent_cap.active && amount <= agent_cap.max_trade_size
+    }
+
     // ===== View functions =====
 
     public fun agent_cap_vault_id(cap: &AgentCap): ID {

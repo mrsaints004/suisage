@@ -7,7 +7,7 @@ import {
   createAccountCap,
 } from './client.js';
 import { config } from './config.js';
-import type { TradeDecision, ExecutionResult } from '@suisage/shared';
+import type { TradeDecision, ExecutionResult, GuardianCheck } from '@suisage/shared';
 import { TRADE_TYPE, MIST_PER_SUI } from '@suisage/shared';
 
 const FLOAT_SCALING = 1_000_000_000n;
@@ -147,6 +147,118 @@ export async function executeTrade(
 }
 
 /**
+ * Execute a full trade cycle as a single Programmable Transaction Block (PTB).
+ *
+ * This demonstrates Sui's composability: multiple actions in one atomic transaction:
+ * 1. Place order on DeepBook
+ * 2. Record trade on-chain with Walrus blob ID reference
+ *
+ * If any step fails, the entire transaction rolls back.
+ */
+export async function executeAtomicTradePTB(
+  decision: TradeDecision,
+  poolId: string,
+  walrusBlobId: string,
+): Promise<ExecutionResult> {
+  if (decision.action === 'HOLD') {
+    return { success: true, filledQuantity: 0, filledPrice: 0 };
+  }
+
+  try {
+    await ensureAccountCap();
+
+    const tx = new Transaction();
+    const quantityMist = BigInt(Math.floor(decision.quantity * Number(MIST_PER_SUI)));
+    const priceBigint = BigInt(Math.floor(decision.price * Number(FLOAT_SCALING)));
+
+    // --- Step 1: Place DeepBook order ---
+    const orderSide: 'bid' | 'ask' = decision.action === 'SELL' ? 'ask' : 'bid';
+    const restriction = decision.orderType === 'MARKET' ? LIMIT_ORDER_IOC : LIMIT_ORDER_NO_RESTRICTION;
+    const expirationMs = decision.orderType === 'MARKET' ? Date.now() + 30_000 : Date.now() + ORDER_EXPIRATION_MS;
+
+    // Build DeepBook place_limit_order call directly in our PTB
+    tx.moveCall({
+      target: `0xdee9::clob_v2::place_limit_order`,
+      arguments: [
+        tx.object(poolId),
+        tx.pure.u64(0), // client_order_id
+        tx.pure.u64(priceBigint),
+        tx.pure.u64(quantityMist),
+        tx.pure.u8(0), // self_matching_prevention
+        tx.pure.bool(orderSide === 'bid'),
+        tx.pure.u64(expirationMs),
+        tx.pure.u8(restriction),
+        tx.object('0x6'), // clock
+        tx.object(config.accountCapId),
+      ],
+      typeArguments: [
+        '0x2::sui::SUI',
+        '0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN',
+      ],
+    });
+
+    // --- Step 2: Record trade on-chain with Walrus reference (same PTB) ---
+    const tradeType = decision.action === 'BUY'
+      ? TRADE_TYPE.BUY
+      : decision.action === 'SELL'
+        ? TRADE_TYPE.SELL
+        : TRADE_TYPE.REBALANCE;
+
+    const blobIdBytes = new TextEncoder().encode(walrusBlobId);
+
+    tx.moveCall({
+      target: `${config.vaultPackageId}::agent_auth::record_trade`,
+      arguments: [
+        tx.object(config.agentCapId),
+        tx.object(config.vaultObjectId),
+        tx.pure.u8(tradeType),
+        tx.pure.u64(quantityMist),
+        tx.pure.u64(priceBigint),
+        tx.pure.vector('u8', Array.from(blobIdBytes)),
+        tx.pure.u64(BigInt(Date.now())),
+      ],
+    });
+
+    console.log(
+      `[Executor] Executing atomic PTB: DeepBook ${orderSide} + on-chain record in single tx`,
+    );
+
+    const result = await executeTransaction(tx);
+    console.log(`[Executor] Atomic PTB executed - tx: ${result.digest}`);
+
+    // Parse fill info
+    let filledQuantity = decision.quantity;
+    let filledPrice = decision.price;
+
+    if (result.events) {
+      for (const event of result.events) {
+        if (event.type.includes('OrderFilled')) {
+          const fields = event.parsedJson as Record<string, unknown>;
+          if (fields.base_asset_quantity_filled) {
+            filledQuantity = Number(BigInt(String(fields.base_asset_quantity_filled))) / Number(MIST_PER_SUI);
+          }
+          if (fields.price) {
+            filledPrice = Number(BigInt(String(fields.price))) / Number(FLOAT_SCALING);
+          }
+        }
+      }
+    }
+
+    return {
+      success: true,
+      txDigest: result.digest,
+      filledQuantity,
+      filledPrice,
+    };
+  } catch (error) {
+    console.error('[Executor] Atomic PTB failed:', error);
+    // Fallback to separate transactions
+    console.log('[Executor] Falling back to separate transactions...');
+    return executeTrade(decision, poolId);
+  }
+}
+
+/**
  * Withdraw funds from DeepBook back to wallet.
  */
 export async function withdrawFromDeepBook(
@@ -203,6 +315,7 @@ export async function listOpenOrders(poolId: string): Promise<Array<{
 
 /**
  * Record a trade on-chain with the Walrus blob ID reference.
+ * (Used as fallback when atomic PTB is not used)
  */
 export async function recordTradeOnChain(
   decision: TradeDecision,

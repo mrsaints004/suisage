@@ -49,6 +49,60 @@ export interface VaultState {
   totalValue: bigint; // balance + deployed
 }
 
+// ===== Guardian Risk Check =====
+
+export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+
+export interface GuardianCheck {
+  approved: boolean;
+  riskLevel: RiskLevel;
+  checks: RiskCheckResult[];
+  overallReason: string;
+  timestamp: number;
+}
+
+export interface RiskCheckResult {
+  name: string;
+  passed: boolean;
+  value: string;
+  threshold: string;
+  message: string;
+}
+
+// ===== Agent Memory (Walrus-backed) =====
+
+export interface AgentMemory {
+  /** Last N reasoning logs retrieved from Walrus */
+  recentDecisions: MemoryEntry[];
+  /** Aggregated performance stats */
+  performance: PerformanceStats;
+  /** Patterns the agent has observed */
+  patterns: string[];
+}
+
+export interface MemoryEntry {
+  blobId: string;
+  timestamp: number;
+  action: TradeAction;
+  price: number;
+  quantity: number;
+  confidence: number;
+  marketCondition: MarketCondition;
+  outcome?: 'PROFIT' | 'LOSS' | 'NEUTRAL' | 'PENDING';
+  pnl?: number;
+}
+
+export interface PerformanceStats {
+  totalTrades: number;
+  winRate: number; // 0-1
+  avgConfidence: number;
+  avgPnlPerTrade: number;
+  totalPnl: number;
+  bestTrade: number;
+  worstTrade: number;
+  consecutiveHolds: number;
+}
+
 // ===== Walrus Reasoning Log =====
 
 export interface ReasoningLog {
@@ -63,6 +117,13 @@ export interface ReasoningLog {
     totalValue: string;
   };
   decision: TradeDecision;
+  guardianCheck?: GuardianCheck;
+  memoryContext?: {
+    recentTradeCount: number;
+    winRate: number;
+    patterns: string[];
+    lastAction: TradeAction | null;
+  };
   executionResult?: ExecutionResult;
 }
 
@@ -111,4 +172,26 @@ export interface StrategyConfig {
   maxOpenPositions: number;
   allowedPools: string[];
   active: boolean;
+}
+
+// ===== DeepBook Predict =====
+
+export interface PredictPosition {
+  marketId: string;
+  direction: 'UP' | 'DOWN';
+  amount: number;
+  entryPrice: number;
+  expiryMs: number;
+  settled: boolean;
+  payout?: number;
+}
+
+export interface PredictMarket {
+  marketId: string;
+  oraclePrice: number;
+  strikePrice: number;
+  expiryMs: number;
+  totalYes: number;
+  totalNo: number;
+  impliedProb: number;
 }
