@@ -1,0 +1,20 @@
+{
+  "name": "suisage",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Autonomous DeFi Agent with Verifiable Reasoning on Sui",
+  "scripts": {
+    "dev": "npm run dashboard:dev",
+    "start": "npm run dashboard:dev",
+    "agent:dev": "npx pnpm --filter agent dev",
+    "agent:build": "npx pnpm --filter agent build",
+    "dashboard:dev": "npx pnpm --filter dashboard dev",
+    "dashboard:build": "npx pnpm --filter dashboard build",
+    "shared:build": "npx pnpm --filter @suisage/shared build",
+    "build": "npx pnpm -r build",
+    "clean": "npx pnpm -r exec rm -rf dist .next node_modules/.cache"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

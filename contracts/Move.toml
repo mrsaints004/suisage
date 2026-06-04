@@ -1,0 +1,8 @@
+[package]
+name = "suisage"
+edition = "2024.beta"
+
+[dependencies]
+
+[addresses]
+suisage = "0x0"

@@ -1,0 +1,6 @@
+packages:
+  - 'packages/*'
+  - 'agent'
+  - 'dashboard'
+allowBuilds:
+  esbuild: true
