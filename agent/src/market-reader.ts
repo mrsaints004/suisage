@@ -1,86 +1,132 @@
-import { suiClient } from './client.js';
+import { deepbookClient, discoverPools } from './client.js';
+import { config } from './config.js';
 import type { MarketSnapshot } from '@suisage/shared';
 
-// DeepBook V3 pool reading
-// On testnet, we'll read the SUI/USDC pool from DeepBook
+const FLOAT_SCALING = 1_000_000_000n;
 
-interface DeepBookPool {
-  poolId: string;
-  baseAsset: string;
-  quoteAsset: string;
+// Cache the resolved pool ID so we only discover once
+let resolvedPoolId: string | null = null;
+
+/**
+ * Resolve the DeepBook pool to use. If DEEPBOOK_POOL_ID is set, use it.
+ * Otherwise discover pools and pick the first SUI-paired one.
+ */
+async function getPoolId(): Promise<string | null> {
+  if (resolvedPoolId) return resolvedPoolId;
+
+  if (config.deepbookPoolId) {
+    resolvedPoolId = config.deepbookPoolId;
+    return resolvedPoolId;
+  }
+
+  // Auto-discover
+  try {
+    const pools = await discoverPools();
+    const suiPool = pools.find(
+      (p) =>
+        p.baseAsset.includes('SUI') ||
+        p.quoteAsset.includes('SUI'),
+    );
+    if (suiPool) {
+      resolvedPoolId = suiPool.poolId;
+      console.log(`[MarketReader] Auto-discovered pool: ${resolvedPoolId}`);
+      return resolvedPoolId;
+    }
+  } catch (error) {
+    console.warn('[MarketReader] Pool discovery failed:', error);
+  }
+
+  return null;
 }
 
-// Known testnet pools - update with actual pool IDs after deployment
-const POOLS: DeepBookPool[] = [
-  {
-    poolId: process.env.DEEPBOOK_POOL_ID || '',
-    baseAsset: 'SUI',
-    quoteAsset: 'USDC',
-  },
-];
+/**
+ * Read real market state from a DeepBook pool.
+ */
+export async function readMarketState(): Promise<MarketSnapshot> {
+  const poolId = await getPoolId();
 
-export async function readMarketState(poolId?: string): Promise<MarketSnapshot> {
-  const pool = POOLS[0];
-  const targetPoolId = poolId || pool.poolId;
-
-  if (!targetPoolId) {
-    // Return simulated data when no pool is configured (for development)
+  if (!poolId) {
+    console.warn('[MarketReader] No pool available, using simulated data');
     return getSimulatedMarketData();
   }
 
   try {
-    // Read pool object to get current state
-    const poolObj = await suiClient.getObject({
-      id: targetPoolId,
-      options: { showContent: true },
-    });
+    // 1. Get best bid/ask from DeepBook
+    const marketPrice = await deepbookClient.getMarketPrice(poolId);
 
-    if (!poolObj.data?.content || poolObj.data.content.dataType !== 'moveObject') {
-      console.warn('[MarketReader] Could not read pool object, using simulated data');
+    const bestBid = marketPrice.bestBidPrice
+      ? Number(marketPrice.bestBidPrice) / Number(FLOAT_SCALING)
+      : undefined;
+    const bestAsk = marketPrice.bestAskPrice
+      ? Number(marketPrice.bestAskPrice) / Number(FLOAT_SCALING)
+      : undefined;
+
+    if (!bestBid && !bestAsk) {
+      console.warn('[MarketReader] Empty orderbook, using simulated data');
       return getSimulatedMarketData();
     }
 
-    // Parse the pool fields - DeepBook V3 structure
-    const fields = poolObj.data.content.fields as Record<string, unknown>;
+    const midPrice = bestBid && bestAsk
+      ? (bestBid + bestAsk) / 2
+      : bestBid || bestAsk || 0;
 
-    // For now, extract what we can and simulate the rest
-    // DeepBook pools store orderbook state that requires specific SDK calls
-    const midPrice = await getMidPrice(targetPoolId);
+    const spread = bestBid && bestAsk ? bestAsk - bestBid : 0;
+    const spreadBps = midPrice > 0 ? (spread / midPrice) * 10000 : 0;
+
+    // 2. Get orderbook depth
+    let bidDepth = 0;
+    let askDepth = 0;
+
+    try {
+      // Query a +-10% range around mid price for depth
+      const lowerBound = BigInt(Math.floor(midPrice * 0.9 * Number(FLOAT_SCALING)));
+      const upperBound = BigInt(Math.ceil(midPrice * 1.1 * Number(FLOAT_SCALING)));
+
+      const [bidLevels, askLevels] = (await deepbookClient.getLevel2BookStatus(
+        poolId,
+        lowerBound,
+        upperBound,
+        'both',
+      )) as Array<Array<{ price: bigint; depth: bigint }>>;
+
+      for (const level of bidLevels) {
+        bidDepth += Number(level.depth) / Number(FLOAT_SCALING);
+      }
+      for (const level of askLevels) {
+        askDepth += Number(level.depth) / Number(FLOAT_SCALING);
+      }
+    } catch (depthError) {
+      console.warn('[MarketReader] Could not read depth:', depthError);
+    }
+
+    console.log(
+      `[MarketReader] Mid: $${midPrice.toFixed(4)} | Bid: $${bestBid?.toFixed(4) ?? 'N/A'} | Ask: $${bestAsk?.toFixed(4) ?? 'N/A'} | Spread: ${spreadBps.toFixed(1)}bps`,
+    );
 
     return {
-      pool: targetPoolId,
-      baseAsset: pool.baseAsset,
-      quoteAsset: pool.quoteAsset,
+      pool: poolId,
+      baseAsset: 'SUI',
+      quoteAsset: 'USDC',
       midPrice,
-      bestBid: midPrice * 0.999,
-      bestAsk: midPrice * 1.001,
-      spread: midPrice * 0.002,
-      spreadBps: 20,
-      bidDepth: 0,
-      askDepth: 0,
-      volume24h: 0,
+      bestBid: bestBid ?? midPrice,
+      bestAsk: bestAsk ?? midPrice,
+      spread,
+      spreadBps,
+      bidDepth,
+      askDepth,
+      volume24h: 0, // DeepBook SDK v0.9 doesn't expose 24h volume directly
       timestamp: Date.now(),
     };
   } catch (error) {
-    console.warn('[MarketReader] Error reading pool, using simulated data:', error);
+    console.error('[MarketReader] Error reading DeepBook pool:', error);
     return getSimulatedMarketData();
   }
 }
 
-async function getMidPrice(poolId: string): Promise<number> {
-  try {
-    // Try to read mid price via DeepBook's get_mid_price
-    const tx = new (await import('@mysten/sui/transactions')).Transaction();
-    // DeepBook V3 uses a different approach - we'd need the DeepBook SDK
-    // For now, fallback to simulated
-    return 1.5 + Math.random() * 0.2; // SUI price range
-  } catch {
-    return 1.5 + Math.random() * 0.2;
-  }
-}
-
+/**
+ * Fallback simulated data - only used when no pool is available or on error.
+ */
 function getSimulatedMarketData(): MarketSnapshot {
-  // Simulated SUI/USDC market data for development/demo
   const basePrice = 1.5;
   const variance = (Math.random() - 0.5) * 0.1;
   const midPrice = basePrice + variance;

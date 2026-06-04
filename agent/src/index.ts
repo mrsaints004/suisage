@@ -3,13 +3,19 @@ import { agentAddress } from './client.js';
 import { readMarketState } from './market-reader.js';
 import { readVaultState } from './vault-manager.js';
 import { makeDecision } from './reasoner.js';
-import { executeTrade, recordTradeOnChain } from './executor.js';
+import {
+  executeTrade,
+  recordTradeOnChain,
+  getDeepBookPosition,
+  depositToDeepBook,
+} from './executor.js';
 import { storeReasoning } from './walrus-logger.js';
-import { REASONING_LOG_VERSION } from '@suisage/shared';
+import { REASONING_LOG_VERSION, MIST_PER_SUI } from '@suisage/shared';
 import type { TradeDecision, ReasoningLog } from '@suisage/shared';
 
 const recentDecisions: TradeDecision[] = [];
 let cycleCount = 0;
+let tradingPoolId: string | null = null;
 
 async function runCycle() {
   cycleCount++;
@@ -18,29 +24,63 @@ async function runCycle() {
   console.log(`${'='.repeat(60)}`);
 
   try {
-    // Step 1: Read market state
-    console.log('[1/6] Reading market state...');
+    // Step 1: Read market state (also resolves pool ID)
+    console.log('[1/7] Reading market state from DeepBook...');
     const market = await readMarketState();
+    console.log(`  Pool: ${market.pool}`);
     console.log(`  Mid price: $${market.midPrice.toFixed(4)} | Spread: ${market.spreadBps.toFixed(1)}bps`);
+    console.log(`  Bid depth: ${market.bidDepth.toFixed(2)} | Ask depth: ${market.askDepth.toFixed(2)}`);
+
+    // Cache pool ID for executor
+    if (market.pool !== 'simulated') {
+      tradingPoolId = market.pool;
+    }
 
     // Step 2: Read vault state
-    console.log('[2/6] Reading vault state...');
+    console.log('[2/7] Reading vault state...');
     const vault = await readVaultState();
-    console.log(`  Balance: ${vault.balance} MIST | Deployed: ${vault.deployedAmount} MIST`);
+    const balanceSui = Number(vault.balance) / Number(MIST_PER_SUI);
+    console.log(`  Balance: ${balanceSui.toFixed(4)} SUI | Deployed: ${vault.deployedAmount} MIST`);
 
-    // Step 3: Call Claude for decision
-    console.log('[3/6] Consulting Claude for trading decision...');
+    // Step 3: Check DeepBook position (if pool is real)
+    if (tradingPoolId) {
+      console.log('[3/7] Checking DeepBook position...');
+      try {
+        const position = await getDeepBookPosition(tradingPoolId);
+        console.log(
+          `  Available base: ${position.availableBaseAmount} | Available quote: ${position.availableQuoteAmount}`,
+        );
+      } catch (e) {
+        console.warn('  Could not read DeepBook position (AccountCap may not be set)');
+      }
+    } else {
+      console.log('[3/7] No live pool - skipping DeepBook position check');
+    }
+
+    // Step 4: Call Claude for decision
+    console.log('[4/7] Consulting Claude for trading decision...');
     const decision = await makeDecision(market, vault, recentDecisions);
     console.log(`  Action: ${decision.action} | Confidence: ${decision.confidence}%`);
-    console.log(`  Reasoning: ${decision.reasoning.substring(0, 100)}...`);
+    console.log(`  Reasoning: ${decision.reasoning.substring(0, 120)}...`);
 
-    // Step 4: Execute trade if not HOLD
-    console.log('[4/6] Executing trade...');
-    const executionResult = await executeTrade(decision);
-    console.log(`  Result: ${executionResult.success ? 'SUCCESS' : 'FAILED'}`);
+    // Step 5: Execute trade on DeepBook if not HOLD
+    let executionResult;
+    if (decision.action !== 'HOLD' && tradingPoolId) {
+      console.log('[5/7] Executing trade on DeepBook...');
+      executionResult = await executeTrade(decision, tradingPoolId);
+      console.log(
+        `  Result: ${executionResult.success ? 'SUCCESS' : 'FAILED'}${executionResult.txDigest ? ` (tx: ${executionResult.txDigest})` : ''}`,
+      );
+    } else if (decision.action !== 'HOLD') {
+      console.log('[5/7] No live pool - trade simulated');
+      executionResult = { success: true, filledQuantity: decision.quantity, filledPrice: decision.price };
+    } else {
+      console.log('[5/7] HOLD - no trade needed');
+      executionResult = { success: true, filledQuantity: 0, filledPrice: 0 };
+    }
 
-    // Step 5: Store reasoning on Walrus
-    console.log('[5/6] Storing reasoning on Walrus...');
+    // Step 6: Store reasoning on Walrus
+    console.log('[6/7] Storing reasoning on Walrus...');
     const reasoningLog: ReasoningLog = {
       version: REASONING_LOG_VERSION,
       agentId: agentAddress,
@@ -59,15 +99,15 @@ async function runCycle() {
     const walrusBlobId = await storeReasoning(reasoningLog);
     console.log(`  Walrus blob ID: ${walrusBlobId}`);
 
-    // Step 6: Record on-chain (only for non-HOLD actions)
+    // Step 7: Record on-chain (only for non-HOLD actions)
     if (decision.action !== 'HOLD') {
-      console.log('[6/6] Recording trade on-chain...');
+      console.log('[7/7] Recording trade on-chain with Walrus reference...');
       const txDigest = await recordTradeOnChain(decision, walrusBlobId, executionResult);
       if (txDigest) {
         console.log(`  On-chain tx: ${txDigest}`);
       }
     } else {
-      console.log('[6/6] HOLD decision - skipping on-chain recording');
+      console.log('[7/7] HOLD decision - skipping on-chain recording');
     }
 
     // Track recent decisions
@@ -90,6 +130,8 @@ async function main() {
   console.log(`Agent: ${agentAddress}`);
   console.log(`Loop interval: ${config.loopIntervalMs}ms`);
   console.log(`Network: ${config.suiNetwork}`);
+  console.log(`DeepBook pool: ${config.deepbookPoolId || '(auto-discover)'}`);
+  console.log(`AccountCap: ${config.accountCapId || '(will create on first trade)'}`);
   console.log('');
 
   // Run first cycle immediately
