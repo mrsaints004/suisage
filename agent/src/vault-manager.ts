@@ -1,13 +1,16 @@
 import { suiClient } from './client.js';
 import { config } from './config.js';
-import type { VaultState } from '@suisage/shared';
+import type { VaultState, AgentCapState, StrategyConfigState } from '@suisage/shared';
 
-export async function readVaultState(): Promise<VaultState> {
-  const vaultId = config.vaultObjectId;
+/**
+ * Read vault state. Accepts an optional vault ID; defaults to config.vaultObjectId.
+ */
+export async function readVaultState(vaultId?: string): Promise<VaultState> {
+  const id = vaultId || config.vaultObjectId;
 
   try {
     const vaultObj = await suiClient.getObject({
-      id: vaultId,
+      id,
       options: { showContent: true },
     });
 
@@ -23,7 +26,7 @@ export async function readVaultState(): Promise<VaultState> {
     const paused = Boolean(fields.paused);
 
     return {
-      vaultId,
+      vaultId: id,
       balance,
       totalShares,
       deployedAmount,
@@ -34,13 +37,76 @@ export async function readVaultState(): Promise<VaultState> {
     console.error('[VaultManager] Error reading vault state:', error);
     // Return empty state on error
     return {
-      vaultId,
+      vaultId: id,
       balance: 0n,
       totalShares: 0n,
       deployedAmount: 0n,
       paused: false,
       totalValue: 0n,
     };
+  }
+}
+
+export async function readAgentCapState(agentCapId: string): Promise<AgentCapState | null> {
+  try {
+    const obj = await suiClient.getObject({
+      id: agentCapId,
+      options: { showContent: true },
+    });
+
+    if (!obj.data?.content || obj.data.content.dataType !== 'moveObject') {
+      console.warn('[VaultManager] Could not read AgentCap object');
+      return null;
+    }
+
+    const fields = obj.data.content.fields as Record<string, unknown>;
+
+    return {
+      agentCapId,
+      vaultId: String(fields.vault_id ?? ''),
+      maxTradeSize: BigInt(String(fields.max_trade_size ?? '0')),
+      maxDeploymentBps: Number(String(fields.max_deployment_bps ?? '0')),
+      active: Boolean(fields.active),
+    };
+  } catch (error) {
+    console.warn('[VaultManager] Error reading AgentCap state:', error);
+    return null;
+  }
+}
+
+export async function readStrategyConfig(strategyConfigId: string): Promise<StrategyConfigState | null> {
+  try {
+    const obj = await suiClient.getObject({
+      id: strategyConfigId,
+      options: { showContent: true },
+    });
+
+    if (!obj.data?.content || obj.data.content.dataType !== 'moveObject') {
+      console.warn('[VaultManager] Could not read StrategyConfig object');
+      return null;
+    }
+
+    const fields = obj.data.content.fields as Record<string, unknown>;
+
+    // Parse allowed_pools — on-chain it's vector<address> which comes as string[]
+    const rawPools = fields.allowed_pools;
+    const allowedPools: string[] = Array.isArray(rawPools)
+      ? rawPools.map(String)
+      : [];
+
+    return {
+      strategyConfigId,
+      vaultId: String(fields.vault_id ?? ''),
+      maxPositionBps: Number(String(fields.max_position_bps ?? '0')),
+      stopLossBps: Number(String(fields.stop_loss_bps ?? '0')),
+      minTradeIntervalSec: Number(String(fields.min_trade_interval_sec ?? '0')),
+      maxOpenPositions: Number(String(fields.max_open_positions ?? '0')),
+      allowedPools,
+      active: Boolean(fields.active),
+    };
+  } catch (error) {
+    console.warn('[VaultManager] Error reading StrategyConfig state:', error);
+    return null;
   }
 }
 

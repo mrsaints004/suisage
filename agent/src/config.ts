@@ -22,11 +22,16 @@ export const config = {
   suiRpcUrl: optionalEnv('SUI_RPC_URL', 'https://fullnode.mainnet.sui.io:443'),
   agentPrivateKey: requireEnv('AGENT_PRIVATE_KEY'),
 
-  // Contract addresses
+  // Contract addresses (package is always required)
   vaultPackageId: requireEnv('VAULT_PACKAGE_ID'),
-  vaultObjectId: requireEnv('VAULT_OBJECT_ID'),
-  agentCapId: requireEnv('AGENT_CAP_ID'),
-  strategyConfigId: requireEnv('STRATEGY_CONFIG_ID'),
+
+  // Single-vault IDs — optional when using multi-vault discovery
+  vaultObjectId: optionalEnv('VAULT_OBJECT_ID', ''),
+  agentCapId: optionalEnv('AGENT_CAP_ID', ''),
+  strategyConfigId: optionalEnv('STRATEGY_CONFIG_ID', ''),
+
+  // Agent public address (for discovery; derived from private key if not set)
+  agentAddress: optionalEnv('AGENT_ADDRESS', ''),
 
   // DeepBook V2
   deepbookPackageId: optionalEnv('DEEPBOOK_PACKAGE_ID', '0xdee9'),
@@ -46,6 +51,9 @@ export const config = {
   // Agent settings
   loopIntervalMs: parseInt(optionalEnv('AGENT_LOOP_INTERVAL_MS', '60000'), 10),
   maxTradeSizeSui: parseInt(optionalEnv('MAX_TRADE_SIZE_SUI', '10'), 10),
+
+  // Discovery refresh interval (how often to re-discover vaults, default 5 min)
+  discoveryRefreshMs: parseInt(optionalEnv('DISCOVERY_REFRESH_MS', '300000'), 10),
 };
 
 export type Config = typeof config;

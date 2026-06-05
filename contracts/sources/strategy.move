@@ -1,9 +1,17 @@
 module suisage::strategy {
+    use sui::event;
     use suisage::agent_auth::AdminCap;
 
     // ===== Errors =====
     const ENotAuthorized: u64 = 200;
     const EInvalidBps: u64 = 201;
+
+    // ===== Events =====
+
+    public struct StrategyCreatedEvent has copy, drop {
+        vault_id: ID,
+        strategy_config_id: ID,
+    }
 
     // ===== Objects =====
 
@@ -54,6 +62,12 @@ module suisage::strategy {
             max_open_positions,
             active: true,
         };
+
+        event::emit(StrategyCreatedEvent {
+            vault_id,
+            strategy_config_id: object::id(&config),
+        });
+
         transfer::share_object(config);
     }
 

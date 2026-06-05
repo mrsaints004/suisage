@@ -174,6 +174,44 @@ export interface StrategyConfig {
   active: boolean;
 }
 
+// ===== On-chain AgentCap state (read from chain each cycle) =====
+
+export interface AgentCapState {
+  agentCapId: string;
+  vaultId: string;
+  maxTradeSize: bigint; // in MIST
+  maxDeploymentBps: number;
+  active: boolean;
+}
+
+// ===== On-chain StrategyConfig state (read from chain each cycle) =====
+
+export interface StrategyConfigState {
+  strategyConfigId: string;
+  vaultId: string;
+  maxPositionBps: number;
+  stopLossBps: number;
+  minTradeIntervalSec: number;
+  maxOpenPositions: number;
+  allowedPools: string[];
+  active: boolean;
+}
+
+// ===== Combined on-chain config for guardian =====
+
+export interface OnChainConfig {
+  agentCap?: AgentCapState;
+  strategyConfig?: StrategyConfigState;
+}
+
+// ===== Multi-vault discovery =====
+
+export interface ManagedVault {
+  vaultId: string;
+  agentCapId: string;
+  strategyConfigId: string | null;
+}
+
 // ===== DeepBook Predict =====
 
 export interface PredictPosition {

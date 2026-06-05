@@ -3,11 +3,13 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ConnectButton } from '@mysten/dapp-kit';
+import { VaultSelector } from './VaultSelector';
 
 const navItems = [
   { href: '/', label: 'Home' },
   { href: '/portfolio', label: 'Portfolio' },
   { href: '/reasoning', label: 'Reasoning' },
+  { href: '/admin', label: 'Admin' },
 ];
 
 export function Navbar() {
@@ -41,7 +43,10 @@ export function Navbar() {
               ))}
             </div>
           </div>
-          <ConnectButton />
+          <div className="flex items-center gap-3">
+            <VaultSelector />
+            <ConnectButton />
+          </div>
         </div>
       </div>
     </nav>

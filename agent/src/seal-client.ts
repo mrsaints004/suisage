@@ -19,66 +19,42 @@
  */
 
 import { config } from './config.js';
+import type { SealClient as SealClientType } from '@mysten/seal';
 
 // Seal configuration
 const SEAL_PACKAGE_ID = process.env.SEAL_PACKAGE_ID || '';
-const SEAL_KEY_SERVER_URL = process.env.SEAL_KEY_SERVER_URL || 'https://seal-key-server.testnet.walrus.dev';
+const SEAL_KEY_SERVER_OBJECT_ID = process.env.SEAL_KEY_SERVER_OBJECT_ID || '';
 
 let sealEnabled = false;
-
-interface SealInstance {
-  encrypt: (data: Uint8Array, policyId: string) => Promise<Uint8Array>;
-  decrypt: (encryptedData: Uint8Array, txBytes: Uint8Array) => Promise<Uint8Array>;
-}
-
-let sealInstance: SealInstance | null = null;
+let sealClient: SealClientType | null = null;
 
 /**
  * Initialize Seal client. Call once at startup.
  */
 export async function initSeal(): Promise<boolean> {
-  if (!SEAL_PACKAGE_ID) {
-    console.log('[Seal] Not configured (set SEAL_PACKAGE_ID to enable encrypted reasoning)');
+  if (!SEAL_PACKAGE_ID || !SEAL_KEY_SERVER_OBJECT_ID) {
+    console.log('[Seal] Not configured (set SEAL_PACKAGE_ID and SEAL_KEY_SERVER_OBJECT_ID to enable encrypted reasoning)');
     return false;
   }
 
   try {
-    // Dynamic import of Seal SDK
-    const sealModule = await import('@mysten/seal');
-
-    // The Seal SDK provides SealClient for encryption/decryption
-    const { SealClient } = sealModule;
+    const { SealClient } = await import('@mysten/seal');
     const { SuiClient, getFullnodeUrl } = await import('@mysten/sui/client');
 
     const suiClient = new SuiClient({
       url: config.suiRpcUrl || getFullnodeUrl(config.suiNetwork),
     });
 
-    const client = new SealClient({
+    sealClient = new SealClient({
       suiClient,
-      serverObjectIds: [SEAL_KEY_SERVER_URL], // key server object IDs
-      verifyKeyServers: false, // testnet, skip verification
+      serverConfigs: [
+        {
+          objectId: SEAL_KEY_SERVER_OBJECT_ID,
+          weight: 1,
+        },
+      ],
+      verifyKeyServers: false, // testnet — skip verification
     });
-
-    sealInstance = {
-      encrypt: async (data: Uint8Array, policyId: string): Promise<Uint8Array> => {
-        // Seal encrypts using the policy object ID as the encryption identity
-        const encrypted = await client.encrypt({
-          threshold: 2,
-          packageId: SEAL_PACKAGE_ID,
-          id: policyId,
-          data,
-        });
-        return encrypted;
-      },
-      decrypt: async (encryptedData: Uint8Array, txBytes: Uint8Array): Promise<Uint8Array> => {
-        const decrypted = await client.decrypt({
-          data: encryptedData,
-          txBytes,
-        });
-        return decrypted;
-      },
-    };
 
     console.log('[Seal] Initialized — reasoning will be encrypted before Walrus storage');
     sealEnabled = true;
@@ -94,7 +70,7 @@ export async function initSeal(): Promise<boolean> {
  * Check if Seal encryption is enabled.
  */
 export function isSealEnabled(): boolean {
-  return sealEnabled && sealInstance !== null;
+  return sealEnabled && sealClient !== null;
 }
 
 /**
@@ -109,7 +85,7 @@ export async function encryptReasoning(
   jsonData: string,
   policyId?: string,
 ): Promise<{ data: string | Uint8Array; encrypted: boolean }> {
-  if (!sealInstance || !policyId) {
+  if (!sealClient || !policyId) {
     return { data: jsonData, encrypted: false };
   }
 
@@ -117,41 +93,18 @@ export async function encryptReasoning(
     const encoder = new TextEncoder();
     const plaintext = encoder.encode(jsonData);
 
-    const encrypted = await sealInstance.encrypt(plaintext, policyId);
+    const { encryptedObject } = await sealClient.encrypt({
+      threshold: 1,
+      packageId: SEAL_PACKAGE_ID,
+      id: policyId,
+      data: plaintext,
+    });
 
-    console.log(`[Seal] Encrypted reasoning (${plaintext.length} bytes → ${encrypted.length} bytes)`);
-    return { data: encrypted, encrypted: true };
+    console.log(`[Seal] Encrypted reasoning (${plaintext.length} bytes → ${encryptedObject.length} bytes)`);
+    return { data: encryptedObject, encrypted: true };
   } catch (error) {
     console.error('[Seal] Encryption failed, storing unencrypted:', error);
     return { data: jsonData, encrypted: false };
-  }
-}
-
-/**
- * Decrypt a reasoning blob retrieved from Walrus.
- * If the data is not encrypted, returns it as-is.
- *
- * @param data - The encrypted data from Walrus
- * @param txBytes - Transaction bytes proving authorization (from Move seal_approve call)
- * @returns Decrypted JSON string
- */
-export async function decryptReasoning(
-  data: Uint8Array,
-  txBytes: Uint8Array,
-): Promise<string> {
-  if (!sealInstance) {
-    // Not encrypted, treat as plain text
-    const decoder = new TextDecoder();
-    return decoder.decode(data);
-  }
-
-  try {
-    const decrypted = await sealInstance.decrypt(data, txBytes);
-    const decoder = new TextDecoder();
-    return decoder.decode(decrypted);
-  } catch (error) {
-    console.error('[Seal] Decryption failed:', error);
-    throw error;
   }
 }
 
@@ -177,6 +130,6 @@ export function getSealStatus(): {
     enabled: sealEnabled,
     packageId: SEAL_PACKAGE_ID,
     policyId: getSealPolicyId(),
-    keyServer: SEAL_KEY_SERVER_URL,
+    keyServer: SEAL_KEY_SERVER_OBJECT_ID,
   };
 }

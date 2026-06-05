@@ -26,6 +26,7 @@ import type {
   GuardianCheck,
   RiskCheckResult,
   RiskLevel,
+  OnChainConfig,
 } from '@suisage/shared';
 
 let lastTradeTimestamp = 0;
@@ -38,6 +39,7 @@ export function runGuardianChecks(
   decision: TradeDecision,
   market: MarketSnapshot,
   vault: VaultState,
+  onChainConfig?: OnChainConfig,
 ): GuardianCheck {
   if (decision.action === 'HOLD') {
     return {
@@ -49,15 +51,40 @@ export function runGuardianChecks(
     };
   }
 
+  // Check if strategy is disabled on-chain
+  if (onChainConfig?.strategyConfig && !onChainConfig.strategyConfig.active) {
+    return {
+      approved: false,
+      riskLevel: 'CRITICAL',
+      checks: [{ name: 'Strategy Active', passed: false, value: 'INACTIVE', threshold: 'Active', message: 'Strategy is disabled on-chain by admin' }],
+      overallReason: 'BLOCKED: Strategy is disabled on-chain.',
+      timestamp: Date.now(),
+    };
+  }
+
+  // Check if agent cap is disabled on-chain
+  if (onChainConfig?.agentCap && !onChainConfig.agentCap.active) {
+    return {
+      approved: false,
+      riskLevel: 'CRITICAL',
+      checks: [{ name: 'Agent Active', passed: false, value: 'INACTIVE', threshold: 'Active', message: 'AgentCap is disabled on-chain by admin' }],
+      overallReason: 'BLOCKED: AgentCap is disabled on-chain.',
+      timestamp: Date.now(),
+    };
+  }
+
   const checks: RiskCheckResult[] = [];
 
-  // 1. Budget ceiling check
-  const maxTradeSui = config.maxTradeSizeSui;
+  // 1. Budget ceiling check — use on-chain AgentCap max_trade_size if available
+  const maxTradeSui = onChainConfig?.agentCap
+    ? Number(onChainConfig.agentCap.maxTradeSize) / Number(MIST_PER_SUI)
+    : config.maxTradeSizeSui;
+  const budgetSource = onChainConfig?.agentCap ? 'on-chain' : 'config';
   checks.push({
     name: 'Budget Ceiling',
     passed: decision.quantity <= maxTradeSui,
     value: `${decision.quantity} SUI`,
-    threshold: `${maxTradeSui} SUI`,
+    threshold: `${maxTradeSui} SUI (${budgetSource})`,
     message: decision.quantity <= maxTradeSui
       ? `Trade size within limit`
       : `Trade size ${decision.quantity} exceeds max ${maxTradeSui} SUI`,
@@ -75,15 +102,18 @@ export function runGuardianChecks(
       : `Spread ${market.spreadBps.toFixed(1)}bps exceeds ${maxSpread}bps — market too illiquid`,
   });
 
-  // 3. Position concentration
+  // 3. Position concentration — use on-chain max_position_bps if available
   const totalValueSui = Number(vault.totalValue) / Number(MIST_PER_SUI);
   const positionPct = totalValueSui > 0 ? (decision.quantity / totalValueSui) * 100 : 0;
-  const maxPositionPct = GUARDIAN_DEFAULTS.maxPositionPct;
+  const maxPositionPct = onChainConfig?.strategyConfig
+    ? onChainConfig.strategyConfig.maxPositionBps / 100
+    : GUARDIAN_DEFAULTS.maxPositionPct;
+  const posSource = onChainConfig?.strategyConfig ? 'on-chain' : 'default';
   checks.push({
     name: 'Position Concentration',
     passed: positionPct <= maxPositionPct,
     value: `${positionPct.toFixed(1)}%`,
-    threshold: `${maxPositionPct}%`,
+    threshold: `${maxPositionPct}% (${posSource})`,
     message: positionPct <= maxPositionPct
       ? `Position is ${positionPct.toFixed(1)}% of vault — within limits`
       : `Trade would be ${positionPct.toFixed(1)}% of vault — too concentrated`,
@@ -116,15 +146,18 @@ export function runGuardianChecks(
       : `Confidence ${decision.confidence}% is below minimum ${minConfidence}%`,
   });
 
-  // 6. Cooldown check
-  const cooldownMs = GUARDIAN_DEFAULTS.cooldownMs;
+  // 6. Cooldown check — use on-chain min_trade_interval_sec if available
+  const cooldownMs = onChainConfig?.strategyConfig
+    ? onChainConfig.strategyConfig.minTradeIntervalSec * 1000
+    : GUARDIAN_DEFAULTS.cooldownMs;
+  const cooldownSource = onChainConfig?.strategyConfig ? 'on-chain' : 'default';
   const timeSinceLast = Date.now() - lastTradeTimestamp;
   const cooldownPassed = lastTradeTimestamp === 0 || timeSinceLast >= cooldownMs;
   checks.push({
     name: 'Trade Cooldown',
     passed: cooldownPassed,
     value: lastTradeTimestamp === 0 ? 'First trade' : `${(timeSinceLast / 1000).toFixed(0)}s ago`,
-    threshold: `${cooldownMs / 1000}s`,
+    threshold: `${cooldownMs / 1000}s (${cooldownSource})`,
     message: cooldownPassed
       ? `Cooldown period satisfied`
       : `Only ${(timeSinceLast / 1000).toFixed(0)}s since last trade (min ${cooldownMs / 1000}s)`,

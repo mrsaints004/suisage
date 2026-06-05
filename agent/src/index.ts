@@ -1,7 +1,7 @@
 import { config } from './config.js';
 import { agentAddress } from './client.js';
 import { readMarketState } from './market-reader.js';
-import { readVaultState } from './vault-manager.js';
+import { readVaultState, readAgentCapState, readStrategyConfig } from './vault-manager.js';
 import { makeDecision } from './reasoner.js';
 import {
   executeTrade,
@@ -9,6 +9,7 @@ import {
   recordTradeOnChain,
   getDeepBookPosition,
 } from './executor.js';
+import type { VaultIds } from './executor.js';
 import { storeReasoning } from './walrus-logger.js';
 import { loadMemory, addToMemory, formatMemoryForPrompt } from './memory-manager.js';
 import { runGuardianChecks, recordTradeExecution, validateOnChain, formatGuardianReport } from './guardian.js';
@@ -23,36 +24,63 @@ import {
   buildMemWalContext,
 } from './memwal-client.js';
 import { initSeal, isSealEnabled, getSealStatus } from './seal-client.js';
+import { discoverManagedVaults } from './vault-discovery.js';
 import { REASONING_LOG_VERSION, MIST_PER_SUI } from '@suisage/shared';
-import type { TradeDecision, ReasoningLog, GuardianCheck } from '@suisage/shared';
+import type { TradeDecision, ReasoningLog, GuardianCheck, OnChainConfig, ManagedVault } from '@suisage/shared';
 
 const recentDecisions: TradeDecision[] = [];
 let cycleCount = 0;
+let managedVaults: ManagedVault[] = [];
+let lastDiscoveryTime = 0;
 
-async function runCycle() {
-  cycleCount++;
-  console.log(`\n${'='.repeat(60)}`);
-  console.log(`[SuiSage] Cycle #${cycleCount} starting at ${new Date().toISOString()}`);
-  console.log(`${'='.repeat(60)}`);
+/**
+ * Run a trading cycle for a single vault.
+ */
+async function runVaultCycle(vault_info: ManagedVault, vaultIndex: number, totalVaults: number) {
+  const vaultLabel = `[Vault ${vaultIndex + 1}/${totalVaults} ${vault_info.vaultId.slice(0, 12)}...]`;
+  const vaultIds: VaultIds = {
+    vaultObjectId: vault_info.vaultId,
+    agentCapId: vault_info.agentCapId,
+  };
 
   try {
     // Step 1: Read market state from DeepBook
-    console.log('[1/9] Reading market state from DeepBook...');
+    console.log(`${vaultLabel} [1/9] Reading market state from DeepBook...`);
     const market = await readMarketState();
     console.log(`  Mid price: $${market.midPrice.toFixed(4)} | Spread: ${market.spreadBps.toFixed(1)}bps`);
     console.log(`  Bid depth: ${market.bidDepth.toFixed(2)} | Ask depth: ${market.askDepth.toFixed(2)}`);
 
-    // Step 2: Read vault state
-    console.log('[2/9] Reading vault state...');
-    const vault = await readVaultState();
-    const balanceSui = Number(vault.balance) / Number(MIST_PER_SUI);
-    console.log(`  Balance: ${balanceSui.toFixed(4)} SUI | Deployed: ${vault.deployedAmount} MIST`);
+    // Step 2: Read vault state + on-chain config
+    console.log(`${vaultLabel} [2/9] Reading vault state + on-chain config...`);
+    const vaultState = await readVaultState(vault_info.vaultId);
+    const balanceSui = Number(vaultState.balance) / Number(MIST_PER_SUI);
+    console.log(`  Balance: ${balanceSui.toFixed(4)} SUI | Deployed: ${vaultState.deployedAmount} MIST`);
+
+    // Read on-chain AgentCap and StrategyConfig (used by guardian for limits)
+    const onChainConfig: OnChainConfig = {};
+    const agentCapState = await readAgentCapState(vault_info.agentCapId);
+    if (agentCapState) {
+      onChainConfig.agentCap = agentCapState;
+      console.log(`  AgentCap: maxTrade=${Number(agentCapState.maxTradeSize) / 1e9} SUI, active=${agentCapState.active}`);
+    } else {
+      console.warn('  AgentCap: could not read (using config fallbacks)');
+    }
+
+    if (vault_info.strategyConfigId) {
+      const strategyState = await readStrategyConfig(vault_info.strategyConfigId);
+      if (strategyState) {
+        onChainConfig.strategyConfig = strategyState;
+        console.log(`  StrategyConfig: maxPos=${strategyState.maxPositionBps}bps, stopLoss=${strategyState.stopLossBps}bps, cooldown=${strategyState.minTradeIntervalSec}s, active=${strategyState.active}`);
+      } else {
+        console.warn('  StrategyConfig: could not read (using guardian defaults)');
+      }
+    }
 
     // Feed live data to Telegram bot cache
-    updateTelegramCache(market, vault);
+    updateTelegramCache(market, vaultState);
 
     // Step 3: Check DeepBook position
-    console.log('[3/9] Checking DeepBook position...');
+    console.log(`${vaultLabel} [3/9] Checking DeepBook position...`);
     try {
       const position = await getDeepBookPosition(config.deepbookPoolId);
       console.log(
@@ -63,7 +91,7 @@ async function runCycle() {
     }
 
     // Step 4: Load memory from Walrus + MemWal
-    console.log('[4/9] Loading agent memory from Walrus + MemWal...');
+    console.log(`${vaultLabel} [4/9] Loading agent memory from Walrus + MemWal...`);
     const memory = await loadMemory();
     console.log(`  Memory: ${memory.recentDecisions.length} past decisions | Win rate: ${(memory.performance.winRate * 100).toFixed(0)}%`);
     if (memory.patterns.length > 0) {
@@ -81,14 +109,14 @@ async function runCycle() {
     }
 
     // Step 5: Call Claude for decision (with memory + MemWal context)
-    console.log('[5/9] Consulting Claude for trading decision (with Walrus + MemWal memory)...');
-    const decision = await makeDecision(market, vault, recentDecisions, memory, memwalContext);
+    console.log(`${vaultLabel} [5/9] Consulting Claude for trading decision (with Walrus + MemWal memory)...`);
+    const decision = await makeDecision(market, vaultState, recentDecisions, memory, memwalContext);
     console.log(`  Action: ${decision.action} | Confidence: ${decision.confidence}%`);
     console.log(`  Reasoning: ${decision.reasoning.substring(0, 120)}...`);
 
     // Step 6: Guardian risk validation
-    console.log('[6/9] Running Guardian risk checks...');
-    const guardianCheck = runGuardianChecks(decision, market, vault);
+    console.log(`${vaultLabel} [6/9] Running Guardian risk checks...`);
+    const guardianCheck = runGuardianChecks(decision, market, vaultState, onChainConfig);
     console.log(formatGuardianReport(guardianCheck));
 
     // Also validate on-chain if trading
@@ -102,17 +130,17 @@ async function runCycle() {
     }
 
     // Step 7: Store reasoning on Walrus (BEFORE executing — for atomic PTB)
-    console.log('[7/9] Storing reasoning on Walrus...');
+    console.log(`${vaultLabel} [7/9] Storing reasoning on Walrus...`);
     const reasoningLog: ReasoningLog = {
       version: REASONING_LOG_VERSION,
       agentId: agentAddress,
       timestamp: Date.now(),
       marketSnapshot: market,
       vaultState: {
-        balance: vault.balance.toString(),
-        deployed: vault.deployedAmount.toString(),
-        totalShares: vault.totalShares.toString(),
-        totalValue: vault.totalValue.toString(),
+        balance: vaultState.balance.toString(),
+        deployed: vaultState.deployedAmount.toString(),
+        totalShares: vaultState.totalShares.toString(),
+        totalValue: vaultState.totalValue.toString(),
       },
       decision,
       guardianCheck,
@@ -135,13 +163,14 @@ async function runCycle() {
     let txDigest: string | undefined;
 
     if (decision.action !== 'HOLD' && guardianCheck.approved) {
-      console.log('[8/9] Executing atomic PTB: DeepBook trade + on-chain record...');
+      console.log(`${vaultLabel} [8/9] Executing atomic PTB: DeepBook trade + on-chain record...`);
 
       // Try atomic PTB first (trade + record in one transaction)
       executionResult = await executeAtomicTradePTB(
         decision,
         config.deepbookPoolId,
         walrusBlobId,
+        vaultIds,
       );
 
       txDigest = executionResult.txDigest;
@@ -186,27 +215,27 @@ async function runCycle() {
         }
       }
     } else if (decision.action !== 'HOLD' && !guardianCheck.approved) {
-      console.log('[8/9] BLOCKED by Guardian — trade not executed');
+      console.log(`${vaultLabel} [8/9] BLOCKED by Guardian — trade not executed`);
       executionResult = {
         success: false,
         error: `Guardian blocked: ${guardianCheck.overallReason}`,
       };
 
       // Still record the BLOCKED decision on-chain for transparency
-      console.log('[8b/9] Recording blocked decision on-chain...');
-      txDigest = (await recordTradeOnChain(decision, walrusBlobId, executionResult)) ?? undefined;
+      console.log(`${vaultLabel} [8b/9] Recording blocked decision on-chain...`);
+      txDigest = (await recordTradeOnChain(decision, walrusBlobId, executionResult, vaultIds)) ?? undefined;
     } else {
-      console.log('[8/9] HOLD - no trade needed');
+      console.log(`${vaultLabel} [8/9] HOLD - no trade needed`);
       executionResult = { success: true, filledQuantity: 0, filledPrice: 0 };
     }
 
     // Step 9: DeepBook Predict status (if configured)
     if (isPredictEnabled()) {
-      console.log('[9/9] Checking DeepBook Predict markets (testnet)...');
+      console.log(`${vaultLabel} [9/9] Checking DeepBook Predict markets (testnet)...`);
       const markets = await getAvailableMarkets();
       console.log(formatPredictStatus(markets, []));
     } else {
-      console.log('[9/9] DeepBook Predict not configured (optional testnet feature)');
+      console.log(`${vaultLabel} [9/9] DeepBook Predict not configured (optional testnet feature)`);
     }
 
     // Notify via Telegram
@@ -216,17 +245,51 @@ async function runCycle() {
     recentDecisions.push(decision);
     if (recentDecisions.length > 10) recentDecisions.shift();
 
-    console.log(`\n[SuiSage] Cycle #${cycleCount} complete.`);
+    console.log(`${vaultLabel} Cycle complete.`);
   } catch (error) {
-    console.error(`[SuiSage] Cycle #${cycleCount} error:`, error);
+    console.error(`${vaultLabel} Cycle error:`, error);
   }
+}
+
+async function runCycle() {
+  cycleCount++;
+  console.log(`\n${'='.repeat(60)}`);
+  console.log(`[SuiSage] Cycle #${cycleCount} starting at ${new Date().toISOString()}`);
+  console.log(`${'='.repeat(60)}`);
+
+  // Refresh vault discovery periodically
+  const now = Date.now();
+  if (now - lastDiscoveryTime > config.discoveryRefreshMs) {
+    console.log('[SuiSage] Refreshing vault discovery...');
+    try {
+      managedVaults = await discoverManagedVaults();
+      lastDiscoveryTime = now;
+    } catch (error) {
+      console.error('[SuiSage] Discovery refresh failed:', error);
+    }
+  }
+
+  if (managedVaults.length === 0) {
+    console.log('[SuiSage] No managed vaults found. Waiting for new AgentCap assignments...');
+    return;
+  }
+
+  console.log(`[SuiSage] Running cycle for ${managedVaults.length} vault(s) (sequential)...`);
+
+  // Run each vault cycle sequentially to avoid nonce conflicts
+  for (let i = 0; i < managedVaults.length; i++) {
+    await runVaultCycle(managedVaults[i], i, managedVaults.length);
+  }
+
+  console.log(`\n[SuiSage] Cycle #${cycleCount} complete (${managedVaults.length} vaults).`);
 }
 
 async function main() {
   console.log('╔══════════════════════════════════════════════════════╗');
-  console.log('║           SuiSage Trading Agent v2.0                ║');
+  console.log('║           SuiSage Trading Agent v3.0                ║');
   console.log('║   Autonomous DeFi with Verifiable AI Reasoning      ║');
   console.log('║                                                      ║');
+  console.log('║   Multi-Vault | Per-User Config | Auto-Discovery     ║');
   console.log('║   Memory: Walrus+MemWal  Guard: On-chain  Trade: DeepBook║');
   console.log('║   Privacy: Seal          Chat: Telegram   MCP: Ready ║');
   console.log('╚══════════════════════════════════════════════════════╝');
@@ -235,6 +298,7 @@ async function main() {
   console.log(`DeepBook pool: ${config.deepbookPoolId}`);
   console.log(`Loop interval: ${config.loopIntervalMs}ms`);
   console.log(`Max trade: ${config.maxTradeSizeSui} SUI`);
+  console.log(`Discovery refresh: ${config.discoveryRefreshMs}ms`);
   console.log(`Predict: ${isPredictEnabled() ? 'ENABLED (testnet)' : 'not configured'}`);
 
   // Initialize MemWal (persistent, encrypted agent memory on Walrus)
@@ -246,6 +310,27 @@ async function main() {
   const sealStatus = getSealStatus();
   console.log(`Seal: ${sealReady ? 'ENABLED (encrypted reasoning)' : 'not configured'}`);
   console.log('');
+
+  // Discover managed vaults at startup
+  console.log('[SuiSage] Discovering managed vaults...');
+  try {
+    managedVaults = await discoverManagedVaults();
+    lastDiscoveryTime = Date.now();
+  } catch (error) {
+    console.error('[SuiSage] Initial vault discovery failed:', error);
+  }
+
+  // Fallback: if env vars specify a single vault and discovery found nothing, use them
+  if (managedVaults.length === 0 && config.vaultObjectId && config.agentCapId) {
+    console.log('[SuiSage] No vaults discovered, falling back to env var single-vault config');
+    managedVaults = [{
+      vaultId: config.vaultObjectId,
+      agentCapId: config.agentCapId,
+      strategyConfigId: config.strategyConfigId || null,
+    }];
+  }
+
+  console.log(`[SuiSage] Managing ${managedVaults.length} vault(s)`);
 
   // Start Telegram bot
   await startTelegramBot();

@@ -147,6 +147,15 @@ export async function executeTrade(
 }
 
 /**
+ * Per-vault IDs for multi-vault execution.
+ * When provided, these override the global config values.
+ */
+export interface VaultIds {
+  vaultObjectId: string;
+  agentCapId: string;
+}
+
+/**
  * Execute a full trade cycle as a single Programmable Transaction Block (PTB).
  *
  * This demonstrates Sui's composability: multiple actions in one atomic transaction:
@@ -154,14 +163,24 @@ export async function executeTrade(
  * 2. Record trade on-chain with Walrus blob ID reference
  *
  * If any step fails, the entire transaction rolls back.
+ *
+ * @param vaultIds - optional per-vault IDs; if omitted, uses global config
  */
 export async function executeAtomicTradePTB(
   decision: TradeDecision,
   poolId: string,
   walrusBlobId: string,
+  vaultIds?: VaultIds,
 ): Promise<ExecutionResult> {
   if (decision.action === 'HOLD') {
     return { success: true, filledQuantity: 0, filledPrice: 0 };
+  }
+
+  const agentCapId = vaultIds?.agentCapId || config.agentCapId;
+  const vaultObjectId = vaultIds?.vaultObjectId || config.vaultObjectId;
+
+  if (!agentCapId || !vaultObjectId) {
+    return { success: false, error: 'Missing agentCapId or vaultObjectId' };
   }
 
   try {
@@ -209,8 +228,8 @@ export async function executeAtomicTradePTB(
     tx.moveCall({
       target: `${config.vaultPackageId}::agent_auth::record_trade`,
       arguments: [
-        tx.object(config.agentCapId),
-        tx.object(config.vaultObjectId),
+        tx.object(agentCapId),
+        tx.object(vaultObjectId),
         tx.pure.u8(tradeType),
         tx.pure.u64(quantityMist),
         tx.pure.u64(priceBigint),
@@ -316,12 +335,23 @@ export async function listOpenOrders(poolId: string): Promise<Array<{
 /**
  * Record a trade on-chain with the Walrus blob ID reference.
  * (Used as fallback when atomic PTB is not used)
+ *
+ * @param vaultIds - optional per-vault IDs; if omitted, uses global config
  */
 export async function recordTradeOnChain(
   decision: TradeDecision,
   walrusBlobId: string,
   executionResult: ExecutionResult,
+  vaultIds?: VaultIds,
 ): Promise<string | null> {
+  const agentCapId = vaultIds?.agentCapId || config.agentCapId;
+  const vaultObjectId = vaultIds?.vaultObjectId || config.vaultObjectId;
+
+  if (!agentCapId || !vaultObjectId) {
+    console.error('[Executor] Cannot record trade: missing agentCapId or vaultObjectId');
+    return null;
+  }
+
   try {
     const tx = new Transaction();
 
@@ -339,8 +369,8 @@ export async function recordTradeOnChain(
     tx.moveCall({
       target: `${config.vaultPackageId}::agent_auth::record_trade`,
       arguments: [
-        tx.object(config.agentCapId),
-        tx.object(config.vaultObjectId),
+        tx.object(agentCapId),
+        tx.object(vaultObjectId),
         tx.pure.u8(tradeType),
         tx.pure.u64(quantityMist),
         tx.pure.u64(priceMist),
