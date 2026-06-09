@@ -1,9 +1,39 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
+build/
 .next/
+contracts/build/
+
+# Environment & secrets
 .env
 .env.local
-*.log
-build/
+.env*.local
+*.key
+
+# Turbo
 .turbo/
-contracts/build/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Lock files (pnpm is the package manager — npm lock is stale)
+package-lock.json
+
+# TypeScript cache
+*.tsbuildinfo
