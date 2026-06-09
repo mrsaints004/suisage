@@ -8,7 +8,8 @@ import {
 } from './client.js';
 import { config } from './config.js';
 import type { TradeDecision, ExecutionResult, GuardianCheck } from '@suisage/shared';
-import { TRADE_TYPE, MIST_PER_SUI } from '@suisage/shared';
+import { TRADE_TYPE, MIST_PER_SUI, SUI_COIN_TYPE, WUSDC_COIN_TYPE } from '@suisage/shared';
+import { createHash } from 'crypto';
 
 const FLOAT_SCALING = 1_000_000_000n;
 const ORDER_EXPIRATION_MS = 5 * 60 * 1000; // 5 minute expiry for limit orders
@@ -16,6 +17,15 @@ const ORDER_EXPIRATION_MS = 5 * 60 * 1000; // 5 minute expiry for limit orders
 // DeepBook LimitOrderType values (enum not re-exported from package index)
 const LIMIT_ORDER_NO_RESTRICTION = 0;
 const LIMIT_ORDER_IOC = 1; // Immediate-Or-Cancel
+
+/**
+ * Compute SHA-256 hash of reasoning JSON for on-chain verification.
+ * This hash is stored in TradeRecordEvent so anyone can verify the Walrus blob.
+ */
+export function computeReasoningHash(reasoningJson: string): Uint8Array {
+  const hash = createHash('sha256').update(reasoningJson).digest();
+  return new Uint8Array(hash);
+}
 
 /**
  * Ensure DeepBook AccountCap exists. Creates one if missing.
@@ -153,6 +163,7 @@ export async function executeTrade(
 export interface VaultIds {
   vaultObjectId: string;
   agentCapId: string;
+  strategyConfigId?: string;
 }
 
 /**
@@ -160,7 +171,7 @@ export interface VaultIds {
  *
  * This demonstrates Sui's composability: multiple actions in one atomic transaction:
  * 1. Place order on DeepBook
- * 2. Record trade on-chain with Walrus blob ID reference
+ * 2. Record trade on-chain with Walrus blob ID + reasoning hash reference
  *
  * If any step fails, the entire transaction rolls back.
  *
@@ -170,6 +181,8 @@ export async function executeAtomicTradePTB(
   decision: TradeDecision,
   poolId: string,
   walrusBlobId: string,
+  reasoningHash: Uint8Array,
+  guardianApproved: boolean,
   vaultIds?: VaultIds,
 ): Promise<ExecutionResult> {
   if (decision.action === 'HOLD') {
@@ -211,12 +224,12 @@ export async function executeAtomicTradePTB(
         tx.object(config.accountCapId),
       ],
       typeArguments: [
-        '0x2::sui::SUI',
-        '0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN',
+        SUI_COIN_TYPE,
+        WUSDC_COIN_TYPE,
       ],
     });
 
-    // --- Step 2: Record trade on-chain with Walrus reference (same PTB) ---
+    // --- Step 2: Record trade on-chain with Walrus reference + reasoning hash ---
     const tradeType = decision.action === 'BUY'
       ? TRADE_TYPE.BUY
       : decision.action === 'SELL'
@@ -224,6 +237,7 @@ export async function executeAtomicTradePTB(
         : TRADE_TYPE.REBALANCE;
 
     const blobIdBytes = new TextEncoder().encode(walrusBlobId);
+    const confidence = Math.min(255, Math.max(0, Math.round(decision.confidence)));
 
     tx.moveCall({
       target: `${config.vaultPackageId}::agent_auth::record_trade`,
@@ -234,7 +248,10 @@ export async function executeAtomicTradePTB(
         tx.pure.u64(quantityMist),
         tx.pure.u64(priceBigint),
         tx.pure.vector('u8', Array.from(blobIdBytes)),
-        tx.pure.u64(BigInt(Date.now())),
+        tx.pure.vector('u8', Array.from(reasoningHash)),
+        tx.pure.bool(guardianApproved),
+        tx.pure.u8(confidence),
+        tx.object('0x6'), // clock
       ],
     });
 
@@ -274,6 +291,225 @@ export async function executeAtomicTradePTB(
     // Fallback to separate transactions
     console.log('[Executor] Falling back to separate transactions...');
     return executeTrade(decision, poolId);
+  }
+}
+
+/**
+ * Execute a full vault-funded trade cycle as a single PTB:
+ * 1. withdraw_for_trading → gets Coin<SUI> from vault (with on-chain Guardian checks)
+ * 2. deposit_base → deposits coin to DeepBook
+ * 3. place_limit_order → trades
+ * 4. record_trade → records on-chain with Walrus blob + reasoning hash
+ *
+ * The withdraw_for_trading step now enforces:
+ * - Trade size limits (AgentCap)
+ * - Deployment limits (AgentCap)
+ * - Position concentration (StrategyConfig)
+ * - Cooldown (StrategyConfig + Clock)
+ * - Vault pause state
+ * - Strategy active state
+ */
+export async function executeVaultTradePTB(
+  decision: TradeDecision,
+  poolId: string,
+  walrusBlobId: string,
+  reasoningHash: Uint8Array,
+  guardianApproved: boolean,
+  vaultIds: VaultIds,
+): Promise<ExecutionResult> {
+  if (decision.action === 'HOLD') {
+    return { success: true, filledQuantity: 0, filledPrice: 0 };
+  }
+
+  const { agentCapId, vaultObjectId, strategyConfigId } = vaultIds;
+
+  if (!agentCapId || !vaultObjectId) {
+    return { success: false, error: 'Missing agentCapId or vaultObjectId' };
+  }
+
+  if (!strategyConfigId) {
+    return { success: false, error: 'Missing strategyConfigId — required for on-chain Guardian enforcement' };
+  }
+
+  try {
+    await ensureAccountCap();
+
+    const tx = new Transaction();
+    const quantityMist = BigInt(Math.floor(decision.quantity * Number(MIST_PER_SUI)));
+    const priceBigint = BigInt(Math.floor(decision.price * Number(FLOAT_SCALING)));
+
+    // --- Step 1: Withdraw from vault (with Move-enforced Guardian checks) ---
+    // This call enforces: trade size, deployment limit, position concentration,
+    // cooldown, vault pause, and strategy active — ALL ON-CHAIN.
+    const [tradeCoin] = tx.moveCall({
+      target: `${config.vaultPackageId}::agent_auth::withdraw_for_trading`,
+      arguments: [
+        tx.object(agentCapId),
+        tx.object(vaultObjectId),
+        tx.object(strategyConfigId),
+        tx.pure.u64(quantityMist),
+        tx.object('0x6'), // clock — for cooldown enforcement
+      ],
+    });
+
+    // --- Step 2: Deposit into DeepBook ---
+    tx.moveCall({
+      target: `0xdee9::clob_v2::deposit_base`,
+      arguments: [
+        tx.object(poolId),
+        tradeCoin,
+        tx.object(config.accountCapId),
+      ],
+      typeArguments: [
+        SUI_COIN_TYPE,
+        WUSDC_COIN_TYPE,
+      ],
+    });
+
+    // --- Step 3: Place DeepBook order ---
+    const orderSide: 'bid' | 'ask' = decision.action === 'SELL' ? 'ask' : 'bid';
+    const restriction = decision.orderType === 'MARKET' ? LIMIT_ORDER_IOC : LIMIT_ORDER_NO_RESTRICTION;
+    const expirationMs = decision.orderType === 'MARKET' ? Date.now() + 30_000 : Date.now() + ORDER_EXPIRATION_MS;
+
+    tx.moveCall({
+      target: `0xdee9::clob_v2::place_limit_order`,
+      arguments: [
+        tx.object(poolId),
+        tx.pure.u64(0), // client_order_id
+        tx.pure.u64(priceBigint),
+        tx.pure.u64(quantityMist),
+        tx.pure.u8(0), // self_matching_prevention
+        tx.pure.bool(orderSide === 'bid'),
+        tx.pure.u64(expirationMs),
+        tx.pure.u8(restriction),
+        tx.object('0x6'), // clock
+        tx.object(config.accountCapId),
+      ],
+      typeArguments: [
+        SUI_COIN_TYPE,
+        WUSDC_COIN_TYPE,
+      ],
+    });
+
+    // --- Step 4: Record trade on-chain with reasoning hash ---
+    const tradeType = decision.action === 'BUY'
+      ? TRADE_TYPE.BUY
+      : decision.action === 'SELL'
+        ? TRADE_TYPE.SELL
+        : TRADE_TYPE.REBALANCE;
+
+    const blobIdBytes = new TextEncoder().encode(walrusBlobId);
+    const confidence = Math.min(255, Math.max(0, Math.round(decision.confidence)));
+
+    tx.moveCall({
+      target: `${config.vaultPackageId}::agent_auth::record_trade`,
+      arguments: [
+        tx.object(agentCapId),
+        tx.object(vaultObjectId),
+        tx.pure.u8(tradeType),
+        tx.pure.u64(quantityMist),
+        tx.pure.u64(priceBigint),
+        tx.pure.vector('u8', Array.from(blobIdBytes)),
+        tx.pure.vector('u8', Array.from(reasoningHash)),
+        tx.pure.bool(guardianApproved),
+        tx.pure.u8(confidence),
+        tx.object('0x6'), // clock
+      ],
+    });
+
+    console.log(
+      `[Executor] Executing vault-funded PTB: withdraw(+guardian) -> deposit -> trade -> record`,
+    );
+
+    const result = await executeTransaction(tx);
+    console.log(`[Executor] Vault PTB executed - tx: ${result.digest}`);
+
+    // Parse fill info
+    let filledQuantity = decision.quantity;
+    let filledPrice = decision.price;
+
+    if (result.events) {
+      for (const event of result.events) {
+        if (event.type.includes('OrderFilled')) {
+          const fields = event.parsedJson as Record<string, unknown>;
+          if (fields.base_asset_quantity_filled) {
+            filledQuantity = Number(BigInt(String(fields.base_asset_quantity_filled))) / Number(MIST_PER_SUI);
+          }
+          if (fields.price) {
+            filledPrice = Number(BigInt(String(fields.price))) / Number(FLOAT_SCALING);
+          }
+        }
+      }
+    }
+
+    return {
+      success: true,
+      txDigest: result.digest,
+      filledQuantity,
+      filledPrice,
+    };
+  } catch (error) {
+    console.error('[Executor] Vault PTB failed:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Vault PTB execution error',
+    };
+  }
+}
+
+/**
+ * Return funds from DeepBook back to vault after trading.
+ * 1. withdraw_base from DeepBook → gets Coin<SUI>
+ * 2. return_from_trading → returns coin to vault
+ */
+export async function returnFundsToVault(
+  poolId: string,
+  amount: bigint,
+  vaultIds: VaultIds,
+): Promise<string | null> {
+  const { agentCapId, vaultObjectId } = vaultIds;
+
+  if (!agentCapId || !vaultObjectId) {
+    console.error('[Executor] Cannot return funds: missing agentCapId or vaultObjectId');
+    return null;
+  }
+
+  try {
+    await ensureAccountCap();
+
+    const tx = new Transaction();
+
+    // Step 1: Withdraw from DeepBook
+    const [withdrawnCoin] = tx.moveCall({
+      target: `0xdee9::clob_v2::withdraw_base`,
+      arguments: [
+        tx.object(poolId),
+        tx.pure.u64(amount),
+        tx.object(config.accountCapId),
+      ],
+      typeArguments: [
+        SUI_COIN_TYPE,
+        WUSDC_COIN_TYPE,
+      ],
+    });
+
+    // Step 2: Return to vault
+    tx.moveCall({
+      target: `${config.vaultPackageId}::agent_auth::return_from_trading`,
+      arguments: [
+        tx.object(agentCapId),
+        tx.object(vaultObjectId),
+        withdrawnCoin,
+      ],
+    });
+
+    console.log(`[Executor] Returning ${amount} MIST from DeepBook to vault...`);
+    const result = await executeTransaction(tx);
+    console.log(`[Executor] Funds returned to vault - tx: ${result.digest}`);
+    return result.digest;
+  } catch (error) {
+    console.error('[Executor] Failed to return funds to vault:', error);
+    return null;
   }
 }
 
@@ -333,15 +569,17 @@ export async function listOpenOrders(poolId: string): Promise<Array<{
 }
 
 /**
- * Record a trade on-chain with the Walrus blob ID reference.
- * (Used as fallback when atomic PTB is not used)
+ * Record a trade on-chain with the Walrus blob ID + reasoning hash reference.
+ * (Used as fallback when atomic PTB is not used, or for blocked decisions)
  *
  * @param vaultIds - optional per-vault IDs; if omitted, uses global config
  */
 export async function recordTradeOnChain(
   decision: TradeDecision,
   walrusBlobId: string,
+  reasoningHash: Uint8Array,
   executionResult: ExecutionResult,
+  guardianApproved: boolean,
   vaultIds?: VaultIds,
 ): Promise<string | null> {
   const agentCapId = vaultIds?.agentCapId || config.agentCapId;
@@ -365,6 +603,7 @@ export async function recordTradeOnChain(
     const quantityMist = BigInt(Math.floor(decision.quantity * Number(MIST_PER_SUI)));
 
     const blobIdBytes = new TextEncoder().encode(walrusBlobId);
+    const confidence = Math.min(255, Math.max(0, Math.round(decision.confidence)));
 
     tx.moveCall({
       target: `${config.vaultPackageId}::agent_auth::record_trade`,
@@ -375,7 +614,10 @@ export async function recordTradeOnChain(
         tx.pure.u64(quantityMist),
         tx.pure.u64(priceMist),
         tx.pure.vector('u8', Array.from(blobIdBytes)),
-        tx.pure.u64(BigInt(Date.now())),
+        tx.pure.vector('u8', Array.from(reasoningHash)),
+        tx.pure.bool(guardianApproved),
+        tx.pure.u8(confidence),
+        tx.object('0x6'), // clock
       ],
     });
 

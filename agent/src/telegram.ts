@@ -1,5 +1,5 @@
 import { Bot, InlineKeyboard } from 'grammy';
-import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { config } from './config.js';
 import { agentAddress } from './client.js';
 import { readVaultState } from './vault-manager.js';
@@ -26,7 +26,7 @@ let recentLogs: Array<{
 let lastMarket: MarketSnapshot | null = null;
 let lastVault: VaultState | null = null;
 
-const anthropic = new Anthropic({ apiKey: config.anthropicApiKey });
+const genAI = new GoogleGenerativeAI(config.geminiApiKey);
 
 const SAGE_SYSTEM_PROMPT = `You are SuiSage, a friendly and knowledgeable AI trading assistant on the Sui blockchain. You help users understand what's happening with their vault, trades, and the market.
 
@@ -133,22 +133,27 @@ async function getAIResponse(chatId: number, userMessage: string): Promise<strin
   const liveContext = buildLiveContext();
 
   try {
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 600,
-      system: `${SAGE_SYSTEM_PROMPT}\n\n--- LIVE DATA ---\n${liveContext}`,
-      messages: history,
+    const chatModel = genAI.getGenerativeModel({
+      model: 'gemini-2.0-flash',
+      systemInstruction: `${SAGE_SYSTEM_PROMPT}\n\n--- LIVE DATA ---\n${liveContext}`,
     });
 
-    const content = response.content[0];
-    const reply = content.type === 'text' ? content.text : 'Sorry, I had trouble thinking about that.';
+    const chat = chatModel.startChat({
+      history: history.slice(0, -1).map((msg) => ({
+        role: msg.role === 'user' ? 'user' : 'model',
+        parts: [{ text: msg.content }],
+      })),
+    });
+
+    const result = await chat.sendMessage(userMessage);
+    const reply = result.response.text();
 
     // Add to history
     history.push({ role: 'assistant', content: reply });
 
     return reply;
   } catch (error) {
-    console.error('[Telegram] Claude API error:', error);
+    console.error('[Telegram] Gemini API error:', error);
     return "I'm having trouble connecting to my brain right now. Try again in a moment?";
   }
 }

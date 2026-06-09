@@ -39,11 +39,11 @@ export const config = {
   accountCapId: optionalEnv('ACCOUNT_CAP_ID', ''),
 
   // Walrus
-  walrusAggregatorUrl: optionalEnv('WALRUS_AGGREGATOR_URL', 'https://aggregator.walrus-testnet.walrus.space'),
-  walrusPublisherUrl: optionalEnv('WALRUS_PUBLISHER_URL', 'https://publisher.walrus-testnet.walrus.space'),
+  walrusAggregatorUrl: optionalEnv('WALRUS_AGGREGATOR_URL', 'https://aggregator.walrus.space'),
+  walrusPublisherUrl: optionalEnv('WALRUS_PUBLISHER_URL', 'https://publisher.walrus.space'),
 
-  // Claude
-  anthropicApiKey: requireEnv('ANTHROPIC_API_KEY'),
+  // Gemini
+  geminiApiKey: requireEnv('GEMINI_API_KEY'),
 
   // Telegram
   telegramBotToken: optionalEnv('TELEGRAM_BOT_TOKEN', ''),

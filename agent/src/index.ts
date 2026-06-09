@@ -6,8 +6,11 @@ import { makeDecision } from './reasoner.js';
 import {
   executeTrade,
   executeAtomicTradePTB,
+  executeVaultTradePTB,
+  returnFundsToVault,
   recordTradeOnChain,
   getDeepBookPosition,
+  computeReasoningHash,
 } from './executor.js';
 import type { VaultIds } from './executor.js';
 import { storeReasoning } from './walrus-logger.js';
@@ -28,7 +31,14 @@ import { discoverManagedVaults } from './vault-discovery.js';
 import { REASONING_LOG_VERSION, MIST_PER_SUI } from '@suisage/shared';
 import type { TradeDecision, ReasoningLog, GuardianCheck, OnChainConfig, ManagedVault } from '@suisage/shared';
 
-const recentDecisions: TradeDecision[] = [];
+const recentDecisionsMap = new Map<string, TradeDecision[]>();
+
+function getRecentDecisions(vaultId: string): TradeDecision[] {
+  if (!recentDecisionsMap.has(vaultId)) {
+    recentDecisionsMap.set(vaultId, []);
+  }
+  return recentDecisionsMap.get(vaultId)!;
+}
 let cycleCount = 0;
 let managedVaults: ManagedVault[] = [];
 let lastDiscoveryTime = 0;
@@ -41,6 +51,7 @@ async function runVaultCycle(vault_info: ManagedVault, vaultIndex: number, total
   const vaultIds: VaultIds = {
     vaultObjectId: vault_info.vaultId,
     agentCapId: vault_info.agentCapId,
+    strategyConfigId: vault_info.strategyConfigId || undefined,
   };
 
   try {
@@ -61,7 +72,7 @@ async function runVaultCycle(vault_info: ManagedVault, vaultIndex: number, total
     const agentCapState = await readAgentCapState(vault_info.agentCapId);
     if (agentCapState) {
       onChainConfig.agentCap = agentCapState;
-      console.log(`  AgentCap: maxTrade=${Number(agentCapState.maxTradeSize) / 1e9} SUI, active=${agentCapState.active}`);
+      console.log(`  AgentCap: maxTrade=${Number(agentCapState.maxTradeSize) / 1e9} SUI, active=${agentCapState.active}, trades=${agentCapState.totalTrades}, vol=${agentCapState.totalVolume}`);
     } else {
       console.warn('  AgentCap: could not read (using config fallbacks)');
     }
@@ -110,18 +121,19 @@ async function runVaultCycle(vault_info: ManagedVault, vaultIndex: number, total
 
     // Step 5: Call Claude for decision (with memory + MemWal context)
     console.log(`${vaultLabel} [5/9] Consulting Claude for trading decision (with Walrus + MemWal memory)...`);
+    const recentDecisions = getRecentDecisions(vault_info.vaultId);
     const decision = await makeDecision(market, vaultState, recentDecisions, memory, memwalContext);
     console.log(`  Action: ${decision.action} | Confidence: ${decision.confidence}%`);
     console.log(`  Reasoning: ${decision.reasoning.substring(0, 120)}...`);
 
-    // Step 6: Guardian risk validation
-    console.log(`${vaultLabel} [6/9] Running Guardian risk checks...`);
+    // Step 6: Guardian risk validation (TypeScript layer — on-chain enforcement happens in PTB)
+    console.log(`${vaultLabel} [6/9] Running Guardian risk checks (off-chain + on-chain enforced)...`);
     const guardianCheck = runGuardianChecks(decision, market, vaultState, onChainConfig);
     console.log(formatGuardianReport(guardianCheck));
 
-    // Also validate on-chain if trading
+    // Also validate on-chain if trading (pass per-vault IDs)
     if (decision.action !== 'HOLD' && guardianCheck.approved) {
-      const onChainCheck = await validateOnChain(decision);
+      const onChainCheck = await validateOnChain(decision, vault_info.agentCapId, vault_info.vaultId);
       if (!onChainCheck.valid) {
         console.log(`  On-chain validation FAILED: ${onChainCheck.error}`);
         guardianCheck.approved = false;
@@ -155,26 +167,55 @@ async function runVaultCycle(vault_info: ManagedVault, vaultIndex: number, total
       executionResult: undefined, // filled after execution
     };
 
-    const walrusBlobId = await storeReasoning(reasoningLog);
-    console.log(`  Walrus blob ID: ${walrusBlobId}`);
+    let walrusBlobId: string;
+    try {
+      walrusBlobId = await storeReasoning(reasoningLog);
+      console.log(`  Walrus blob ID: ${walrusBlobId}`);
+    } catch (walrusError) {
+      console.error(`${vaultLabel} Walrus storage failed — skipping trade (no verifiable reasoning):`, walrusError);
+      return;
+    }
+
+    // Compute reasoning hash for on-chain verification
+    const reasoningJson = JSON.stringify(reasoningLog, null, 2);
+    const reasoningHash = computeReasoningHash(reasoningJson);
+    console.log(`  Reasoning hash (SHA-256): ${Buffer.from(reasoningHash).toString('hex').slice(0, 16)}...`);
 
     // Step 8: Execute trade on DeepBook (if approved by guardian)
     let executionResult;
     let txDigest: string | undefined;
 
     if (decision.action !== 'HOLD' && guardianCheck.approved) {
-      console.log(`${vaultLabel} [8/9] Executing atomic PTB: DeepBook trade + on-chain record...`);
+      console.log(`${vaultLabel} [8/9] Executing vault-funded PTB: withdraw(+on-chain guardian) -> trade -> record...`);
 
-      // Try atomic PTB first (trade + record in one transaction)
-      executionResult = await executeAtomicTradePTB(
+      // Use vault-funded PTB (withdraw from vault → deposit to DeepBook → trade → record)
+      // The withdraw_for_trading call now enforces Guardian checks ON-CHAIN via Move
+      executionResult = await executeVaultTradePTB(
         decision,
         config.deepbookPoolId,
         walrusBlobId,
+        reasoningHash,
+        guardianCheck.approved,
         vaultIds,
       );
 
       txDigest = executionResult.txDigest;
       recordTradeExecution();
+
+      // After IOC trades, return remaining funds to vault
+      if (executionResult.success && decision.orderType === 'MARKET') {
+        try {
+          const filledMist = BigInt(Math.floor((executionResult.filledQuantity ?? 0) * Number(MIST_PER_SUI)));
+          const requestedMist = BigInt(Math.floor(decision.quantity * Number(MIST_PER_SUI)));
+          const remainingMist = requestedMist - filledMist;
+          if (remainingMist > 0n) {
+            console.log(`${vaultLabel} [8b/9] Returning ${remainingMist} MIST unfilled funds to vault...`);
+            await returnFundsToVault(config.deepbookPoolId, remainingMist, vaultIds);
+          }
+        } catch (returnError) {
+          console.warn(`${vaultLabel} Failed to return unfilled funds to vault:`, returnError);
+        }
+      }
 
       console.log(
         `  Result: ${executionResult.success ? 'SUCCESS' : 'FAILED'}${txDigest ? ` (tx: ${txDigest})` : ''}`,
@@ -222,8 +263,8 @@ async function runVaultCycle(vault_info: ManagedVault, vaultIndex: number, total
       };
 
       // Still record the BLOCKED decision on-chain for transparency
-      console.log(`${vaultLabel} [8b/9] Recording blocked decision on-chain...`);
-      txDigest = (await recordTradeOnChain(decision, walrusBlobId, executionResult, vaultIds)) ?? undefined;
+      console.log(`${vaultLabel} [8b/9] Recording blocked decision on-chain (with reasoning hash)...`);
+      txDigest = (await recordTradeOnChain(decision, walrusBlobId, reasoningHash, executionResult, false, vaultIds)) ?? undefined;
     } else {
       console.log(`${vaultLabel} [8/9] HOLD - no trade needed`);
       executionResult = { success: true, filledQuantity: 0, filledPrice: 0 };
@@ -285,14 +326,15 @@ async function runCycle() {
 }
 
 async function main() {
-  console.log('╔══════════════════════════════════════════════════════╗');
-  console.log('║           SuiSage Trading Agent v3.0                ║');
-  console.log('║   Autonomous DeFi with Verifiable AI Reasoning      ║');
-  console.log('║                                                      ║');
-  console.log('║   Multi-Vault | Per-User Config | Auto-Discovery     ║');
-  console.log('║   Memory: Walrus+MemWal  Guard: On-chain  Trade: DeepBook║');
-  console.log('║   Privacy: Seal          Chat: Telegram   MCP: Ready ║');
-  console.log('╚══════════════════════════════════════════════════════╝');
+  console.log('╔══════════════════════════════════════════════════════════╗');
+  console.log('║           SuiSage Trading Agent v4.0                    ║');
+  console.log('║   Autonomous DeFi with Verifiable AI Reasoning          ║');
+  console.log('║                                                         ║');
+  console.log('║   Multi-Vault | On-Chain Guardian | Auto-Discovery      ║');
+  console.log('║   Memory: Walrus+MemWal  Guard: Move-Enforced          ║');
+  console.log('║   Trade: DeepBook  Privacy: Seal  Chat: Telegram       ║');
+  console.log('║   Verification: SHA-256 reasoning hash on-chain        ║');
+  console.log('╚══════════════════════════════════════════════════════════╝');
   console.log(`Agent: ${agentAddress}`);
   console.log(`Network: ${config.suiNetwork}`);
   console.log(`DeepBook pool: ${config.deepbookPoolId}`);

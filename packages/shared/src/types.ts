@@ -47,6 +47,14 @@ export interface VaultState {
   deployedAmount: bigint;
   paused: boolean;
   totalValue: bigint; // balance + deployed
+  // Performance tracking
+  performanceFeeBps?: number;
+  highWaterMark?: bigint;
+  accruedFees?: bigint;
+  totalProfit?: bigint;
+  totalLoss?: bigint;
+  navPerShare?: bigint;
+  profitEvents?: number;
 }
 
 // ===== Guardian Risk Check =====
@@ -144,7 +152,10 @@ export interface TradeRecordEvent {
   amount: string;
   price: string;
   walrusBlobId: string;
+  reasoningHash: string;
   timestampMs: string;
+  guardianApproved: boolean;
+  confidence: number;
 }
 
 export interface DepositEvent {
@@ -161,6 +172,14 @@ export interface WithdrawEvent {
   amount: string;
   sharesBurned: string;
   totalShares: string;
+}
+
+export interface PerformanceEvent {
+  vaultId: string;
+  profit: string;
+  feeTaken: string;
+  newHighWaterMark: string;
+  navPerShare: string;
 }
 
 // ===== Strategy Config (mirrors on-chain) =====
@@ -182,6 +201,9 @@ export interface AgentCapState {
   maxTradeSize: bigint; // in MIST
   maxDeploymentBps: number;
   active: boolean;
+  lastTradeTimestampMs: number;
+  totalTrades: number;
+  totalVolume: bigint;
 }
 
 // ===== On-chain StrategyConfig state (read from chain each cycle) =====

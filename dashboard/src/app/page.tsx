@@ -1,27 +1,113 @@
 'use client';
 
 import Link from 'next/link';
-import { useCurrentAccount } from '@mysten/dapp-kit';
+import { useCurrentAccount, useSuiClient } from '@mysten/dapp-kit';
+import { useState, useEffect } from 'react';
+
+const VAULT_PACKAGE_ID = process.env.NEXT_PUBLIC_VAULT_PACKAGE_ID || '';
+const DEFAULT_VAULT_ID = process.env.NEXT_PUBLIC_DEFAULT_VAULT_ID || '';
+const WALRUS_AGGREGATOR_URL = process.env.NEXT_PUBLIC_WALRUS_AGGREGATOR_URL || 'https://aggregator.walrus-testnet.walrus.space';
 
 export default function HomePage() {
   const account = useCurrentAccount();
+  const suiClient = useSuiClient();
+
+  const [stats, setStats] = useState({
+    tvl: '--',
+    trades: '--',
+    price: '--',
+    logs: '--',
+    profit: '--',
+    navPerShare: '--',
+  });
+
+  // Fetch live stats from chain
+  useEffect(() => {
+    async function fetchStats() {
+      try {
+        const updates: Partial<typeof stats> = {};
+
+        // Vault TVL
+        if (DEFAULT_VAULT_ID) {
+          const vaultObj = await suiClient.getObject({
+            id: DEFAULT_VAULT_ID,
+            options: { showContent: true },
+          });
+          if (vaultObj.data?.content && vaultObj.data.content.dataType === 'moveObject') {
+            const fields = vaultObj.data.content.fields as Record<string, unknown>;
+            const rawBalance = fields.balance;
+            const balanceVal = typeof rawBalance === 'object' && rawBalance !== null && 'value' in (rawBalance as any)
+              ? Number(String((rawBalance as any).value))
+              : Number(String(rawBalance ?? '0'));
+            const deployed = Number(String(fields.deployed_amount ?? '0'));
+            const totalValue = (balanceVal + deployed) / 1e9;
+            updates.tvl = totalValue.toFixed(2);
+
+            const totalProfit = Number(String(fields.total_profit ?? '0'));
+            const totalLoss = Number(String(fields.total_loss ?? '0'));
+            const netPnl = (totalProfit - totalLoss) / 1e9;
+            updates.profit = netPnl >= 0 ? `+${netPnl.toFixed(4)}` : netPnl.toFixed(4);
+
+            const totalShares = BigInt(String(fields.total_shares ?? '0'));
+            if (totalShares > BigInt(0)) {
+              const nav = (BigInt(balanceVal + deployed) * BigInt(1_000_000_000)) / totalShares;
+              updates.navPerShare = (Number(nav) / 1e9).toFixed(6);
+            } else {
+              updates.navPerShare = '1.000000';
+            }
+          }
+        }
+
+        // Trade count from events
+        if (VAULT_PACKAGE_ID) {
+          const events = await suiClient.queryEvents({
+            query: {
+              MoveEventType: `${VAULT_PACKAGE_ID}::agent_auth::TradeRecordEvent`,
+            },
+            limit: 50,
+            order: 'descending',
+          });
+          updates.trades = String(events.data.length);
+          updates.logs = String(events.data.length);
+
+          // Extract latest price from most recent trade
+          if (events.data.length > 0) {
+            const latestFields = events.data[0].parsedJson as Record<string, unknown>;
+            const priceRaw = Number(String(latestFields.price ?? '0'));
+            if (priceRaw > 0) {
+              updates.price = `$${(priceRaw / 1e9).toFixed(4)}`;
+            }
+          }
+        }
+
+        setStats((prev) => ({ ...prev, ...updates }));
+      } catch (error) {
+        console.error('Error fetching stats:', error);
+      }
+    }
+
+    fetchStats();
+    const interval = setInterval(fetchStats, 30000);
+    return () => clearInterval(interval);
+  }, [suiClient]);
 
   return (
     <div className="space-y-16">
       {/* Hero */}
       <section className="text-center py-20">
         <div className="inline-block px-3 py-1 rounded-full bg-sage-900/50 text-sage-400 text-xs font-medium mb-6 border border-sage-800/50">
-          Sui Overflow 2026
+          Sui Overflow 2026 &middot; Agentic Web Track
         </div>
         <h1 className="text-5xl font-bold mb-6">
           <span className="text-sage-400">SuiSage</span>
         </h1>
         <p className="text-xl text-gray-400 max-w-2xl mx-auto mb-4">
-          Autonomous DeFi Agent with Verifiable Reasoning
+          Autonomous DeFi Agent with Move-Enforced Guardrails &amp; Verifiable Reasoning
         </p>
         <p className="text-gray-500 max-w-xl mx-auto mb-8">
-          An AI agent that trades on DeepBook, manages your vault on Sui,
-          and stores every decision with full reasoning on Walrus for public audit.
+          An AI agent that trades on DeepBook with budget ceilings enforced by Move smart contracts,
+          cooldown and position limits checked on-chain, and every decision stored immutably on Walrus
+          with a SHA-256 hash committed to the blockchain for verification.
         </p>
         <div className="flex gap-4 justify-center">
           <Link
@@ -43,60 +129,56 @@ export default function HomePage() {
       <section>
         <h2 className="text-2xl font-bold text-center mb-3">How It Works</h2>
         <p className="text-gray-500 text-center mb-10 max-w-lg mx-auto text-sm">
-          Three simple steps. Your funds are managed by AI, and every decision is publicly verifiable.
+          Three simple steps. Your funds are managed by AI with on-chain safety rails.
         </p>
         <div className="grid md:grid-cols-3 gap-6">
           <Card
             step="1"
             title="Deposit SUI"
-            description="Connect your wallet and deposit SUI into the shared vault. You receive shares representing your ownership — like buying into a fund."
-            learnMore="Shares work like stock: if you own 10% of shares, you own 10% of the vault's total value."
+            description="Connect your wallet and deposit SUI into the shared vault. You receive shares representing your ownership. Performance fees are only charged on profits."
+            learnMore="Share-based vault (ERC-4626 style) with 10% performance fee above high-water mark."
           />
           <Card
             step="2"
-            title="Agent Trades"
-            description="Every 60 seconds, the AI reads the live orderbook on DeepBook, analyzes market conditions, and decides whether to buy, sell, or hold."
-            learnMore="The agent uses Claude AI with real market data — prices, depth, spread, and recent history."
+            title="Agent Trades with On-Chain Guards"
+            description="Every 60 seconds, the AI analyzes the DeepBook orderbook and decides to trade. Move contracts enforce budget ceilings, cooldown periods, and position limits — the AI literally cannot exceed them."
+            learnMore="Guardian checks: trade size, concentration, cooldown, deployment limit — all enforced in Move, not just TypeScript."
           />
           <Card
             step="3"
-            title="Verify Reasoning"
-            description="Every decision is stored on Walrus with full reasoning. Click any trade to see exactly why it was made — no hidden logic."
-            learnMore="Walrus is decentralized storage on Sui. Once stored, reasoning data cannot be changed or deleted."
+            title="Verify Every Decision"
+            description="Every decision is stored on Walrus with full reasoning. A SHA-256 hash is committed on-chain so anyone can verify the Walrus blob hasn't been tampered with."
+            learnMore="On-chain hash verification: hash(reasoning_json) stored in TradeRecordEvent. Compare against Walrus blob to prove integrity."
           />
         </div>
       </section>
 
-      {/* Track Coverage */}
+      {/* What Makes This Different */}
       <section>
-        <h2 className="text-2xl font-bold text-center mb-3">Built on Sui</h2>
+        <h2 className="text-2xl font-bold text-center mb-3">Why Sui Makes This Possible</h2>
         <p className="text-gray-500 text-center mb-10 max-w-lg mx-auto text-sm">
-          SuiSage covers all four Sui Overflow hackathon tracks in a single, cohesive product.
+          Not a generic LLM wrapper — Sui primitives make the AI safer and more composable.
         </p>
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <TrackBadge
-            track="Agentic Web"
-            description="Claude-powered autonomous agent making real trading decisions on Sui"
+          <PrimitiveBadge
+            title="Move AgentCap"
+            description="Budget ceiling enforced at the type level. The AI cannot exceed its max_trade_size — it's a Move assertion, not a suggestion."
             color="blue"
-            icon="🤖"
           />
-          <TrackBadge
-            track="Walrus"
-            description="Every reasoning chain stored immutably as Walrus blobs"
+          <PrimitiveBadge
+            title="On-Chain Cooldown"
+            description="Trade interval enforced using sui::clock::Clock. The contract checks elapsed time since last trade — no off-chain trust needed."
             color="purple"
-            icon="🐘"
           />
-          <TrackBadge
-            track="DeepBook"
-            description="All trading executed on DeepBook's central limit orderbook"
+          <PrimitiveBadge
+            title="Atomic PTBs"
+            description="Withdraw + trade + record in a single Programmable Transaction Block. All succeed or all fail — no partial states."
             color="orange"
-            icon="📊"
           />
-          <TrackBadge
-            track="DeFi & Payments"
-            description="Share-based vault contract with deposit, withdraw, and yield"
+          <PrimitiveBadge
+            title="Walrus + Hash"
+            description="Full reasoning stored on Walrus. SHA-256 hash committed on-chain. Anyone can verify the blob matches what the agent committed to."
             color="green"
-            icon="💰"
           />
         </div>
       </section>
@@ -107,14 +189,46 @@ export default function HomePage() {
           <h2 className="text-2xl font-bold">Live Agent Stats</h2>
           <span className="flex items-center gap-2 text-xs text-gray-400">
             <span className="w-2 h-2 rounded-full bg-sage-500 animate-pulse" />
-            Auto-refreshes
+            Auto-refreshes every 30s
           </span>
         </div>
-        <div className="grid sm:grid-cols-4 gap-6">
-          <StatCard label="Total Vault Value" value="--" unit="SUI" hint="Total SUI managed by the agent" />
-          <StatCard label="Trades Executed" value="--" unit="" hint="Number of BUY/SELL trades recorded on-chain" />
-          <StatCard label="Current Price" value="--" unit="USD" hint="Live SUI/USDC mid-price from DeepBook" />
-          <StatCard label="Reasoning Logs" value="--" unit="on Walrus" hint="Decision logs stored immutably" />
+        <div className="grid sm:grid-cols-3 lg:grid-cols-6 gap-6">
+          <StatCard label="Total Vault Value" value={stats.tvl} unit="SUI" hint="Total SUI managed by the agent" />
+          <StatCard label="Trades Executed" value={stats.trades} unit="" hint="On-chain TradeRecordEvents" />
+          <StatCard label="Last Trade Price" value={stats.price} unit="" hint="From most recent TradeRecordEvent" />
+          <StatCard label="Reasoning Logs" value={stats.logs} unit="on Walrus" hint="Each with SHA-256 hash on-chain" />
+          <StatCard label="Net P&L" value={stats.profit} unit="SUI" hint="Total profit minus total loss" />
+          <StatCard label="NAV / Share" value={stats.navPerShare} unit="" hint="Net asset value per share (1.0 = par)" />
+        </div>
+      </section>
+
+      {/* Track Coverage */}
+      <section>
+        <h2 className="text-2xl font-bold text-center mb-3">Hackathon Track: Agentic Web</h2>
+        <p className="text-gray-500 text-center mb-10 max-w-lg mx-auto text-sm">
+          Sub-track 2: Autonomous Agent Wallet — all &quot;must have&quot; requirements met.
+        </p>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <ChecklistItem
+            title="Real DeepBook Orders"
+            description="Limit orders on DeepBook V2 SUI/wUSDC pool via PTB"
+            met={true}
+          />
+          <ChecklistItem
+            title="Self-Enforced Budget Ceiling"
+            description="AgentCap.max_trade_size checked in Move withdraw_for_trading()"
+            met={true}
+          />
+          <ChecklistItem
+            title="On-Chain Activity Log"
+            description="TradeRecordEvent with blob ID + SHA-256 reasoning hash"
+            met={true}
+          />
+          <ChecklistItem
+            title="Owner Revocation Demo"
+            description="AdminCap.revoke_agent() destroys AgentCap instantly"
+            met={true}
+          />
         </div>
       </section>
 
@@ -165,16 +279,14 @@ function Card({
   );
 }
 
-function TrackBadge({
-  track,
+function PrimitiveBadge({
+  title,
   description,
   color,
-  icon,
 }: {
-  track: string;
+  title: string;
   description: string;
   color: string;
-  icon: string;
 }) {
   const colorMap: Record<string, string> = {
     blue: 'border-blue-500/30 bg-blue-500/5',
@@ -185,8 +297,27 @@ function TrackBadge({
 
   return (
     <div className={`rounded-xl p-4 border ${colorMap[color]}`}>
-      <span className="text-2xl mb-2 block">{icon}</span>
-      <h3 className="font-semibold mb-1">{track}</h3>
+      <h3 className="font-semibold mb-1 text-sm">{title}</h3>
+      <p className="text-gray-400 text-xs">{description}</p>
+    </div>
+  );
+}
+
+function ChecklistItem({
+  title,
+  description,
+  met,
+}: {
+  title: string;
+  description: string;
+  met: boolean;
+}) {
+  return (
+    <div className={`rounded-xl p-4 border ${met ? 'border-sage-500/30 bg-sage-500/5' : 'border-red-500/30 bg-red-500/5'}`}>
+      <div className="flex items-center gap-2 mb-1">
+        <span className={`text-sm ${met ? 'text-sage-400' : 'text-red-400'}`}>{met ? '\u2713' : '\u2717'}</span>
+        <h3 className="font-semibold text-sm">{title}</h3>
+      </div>
       <p className="text-gray-400 text-xs">{description}</p>
     </div>
   );

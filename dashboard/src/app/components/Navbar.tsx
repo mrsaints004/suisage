@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { ConnectButton } from '@mysten/dapp-kit';
+import { ConnectButton, useSuiClientContext } from '@mysten/dapp-kit';
 import { VaultSelector } from './VaultSelector';
 
 const navItems = [
@@ -14,6 +14,7 @@ const navItems = [
 
 export function Navbar() {
   const pathname = usePathname();
+  const { network } = useSuiClientContext();
 
   return (
     <nav className="border-b border-gray-800 bg-gray-950/80 backdrop-blur-sm sticky top-0 z-50">
@@ -23,6 +24,7 @@ export function Navbar() {
             <Link href="/" className="flex items-center gap-2">
               <span className="text-xl font-bold text-sage-400">SuiSage</span>
               <span className="text-xs bg-sage-900/50 text-sage-400 px-1.5 py-0.5 rounded border border-sage-800/50">AI</span>
+              <span className={`text-xs px-1.5 py-0.5 rounded font-mono ${network === 'testnet' ? 'bg-yellow-900/50 text-yellow-400 border border-yellow-800/50' : 'bg-green-900/50 text-green-400 border border-green-800/50'}`}>{network}</span>
             </Link>
             <div className="flex gap-1">
               {navItems.map((item) => (

@@ -38,8 +38,7 @@ export async function storeReasoning(log: ReasoningLog): Promise<string> {
     return blobId;
   } catch (error) {
     console.error('[WalrusLogger] Failed to store reasoning:', error);
-    // Return a placeholder so the agent doesn't crash
-    return `error-${Date.now()}`;
+    throw new Error(`Walrus storage failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
 

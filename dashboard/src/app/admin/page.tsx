@@ -27,6 +27,11 @@ interface AgentCapData {
 interface VaultData {
   balance: string;
   paused: boolean;
+  performanceFeeBps: number;
+  accruedFees: string;
+  totalProfit: string;
+  totalLoss: string;
+  navPerShare: string;
 }
 
 export default function AdminPage() {
@@ -47,6 +52,9 @@ export default function AdminPage() {
   const [formStopLossBps, setFormStopLossBps] = useState('');
   const [formMinTradeInterval, setFormMinTradeInterval] = useState('');
   const [formMaxOpenPositions, setFormMaxOpenPositions] = useState('');
+
+  // Performance fee form state
+  const [formPerformanceFeeBps, setFormPerformanceFeeBps] = useState('');
 
   // Vault creation form state
   const [createMaxPositionBps, setCreateMaxPositionBps] = useState('3000');
@@ -139,10 +147,35 @@ export default function AdminPage() {
       const vaultObj = await suiClient.getObject({ id: selectedVault.vaultId, options: { showContent: true } });
       if (vaultObj.data?.content && vaultObj.data.content.dataType === 'moveObject') {
         const fields = vaultObj.data.content.fields as Record<string, unknown>;
+        const rawBalance = fields.balance;
+        const balanceVal = typeof rawBalance === 'object' && rawBalance !== null && 'value' in (rawBalance as any)
+          ? Number(String((rawBalance as any).value))
+          : Number(String(rawBalance ?? '0'));
+        const rawDeployed = fields.deployed_amount;
+        const deployedVal = typeof rawDeployed === 'object' && rawDeployed !== null && 'value' in (rawDeployed as any)
+          ? Number(String((rawDeployed as any).value))
+          : Number(String(rawDeployed ?? '0'));
+        const totalShares = BigInt(String(fields.total_shares ?? '0'));
+        const totalValue = balanceVal + deployedVal;
+        const navPerShare = totalShares > BigInt(0)
+          ? (BigInt(totalValue) * BigInt(1_000_000_000)) / totalShares
+          : BigInt(1_000_000_000);
+        const rawFees = fields.accrued_fees;
+        const accruedFees = typeof rawFees === 'object' && rawFees !== null && 'value' in (rawFees as any)
+          ? Number(String((rawFees as any).value))
+          : Number(String(rawFees ?? '0'));
+        const perfFeeBps = Number(String(fields.performance_fee_bps ?? '1000'));
+
         setVaultData({
-          balance: (Number(String(fields.balance ?? '0')) / 1e9).toFixed(4),
+          balance: (balanceVal / 1e9).toFixed(4),
           paused: Boolean(fields.paused),
+          performanceFeeBps: perfFeeBps,
+          accruedFees: (accruedFees / 1e9).toFixed(4),
+          totalProfit: (Number(String(fields.total_profit ?? '0')) / 1e9).toFixed(4),
+          totalLoss: (Number(String(fields.total_loss ?? '0')) / 1e9).toFixed(4),
+          navPerShare: (Number(navPerShare) / 1e9).toFixed(6),
         });
+        setFormPerformanceFeeBps(String(perfFeeBps));
       }
     } catch (error) {
       console.error('Error fetching on-chain data:', error);
@@ -164,10 +197,8 @@ export default function AdminPage() {
 
     setCreatingVault(true);
     try {
-      // TX1: create_vault + create_admin_cap
+      // TX1: create_vault (shares vault object)
       const tx1 = new Transaction();
-
-      // Create vault (returns shared object)
       tx1.moveCall({
         target: `${VAULT_PACKAGE_ID}::vault::create_vault`,
         arguments: [],
@@ -185,10 +216,8 @@ export default function AdminPage() {
         );
       });
 
-      // Wait for tx1 to be indexed
       await suiClient.waitForTransaction({ digest: tx1Result.digest });
 
-      // Find the created vault object ID
       const txDetails = await suiClient.getTransactionBlock({
         digest: tx1Result.digest,
         options: { showObjectChanges: true },
@@ -205,23 +234,54 @@ export default function AdminPage() {
       const newVaultId = createdVault.objectId;
       showToast(`Vault created: ${newVaultId.slice(0, 16)}...`, 'success');
 
-      // TX2: create_admin_cap for the new vault
+      // TX2: create_admin_cap_returning → create_strategy → authorize_agent → transfer AdminCap
+      // All in one PTB using the returned AdminCap
       const tx2 = new Transaction();
-      tx2.moveCall({
-        target: `${VAULT_PACKAGE_ID}::agent_auth::create_admin_cap`,
-        arguments: [tx2.object(newVaultId)],
-      });
 
-      showToast('Sign transaction 2/2: Create admin cap + strategy + authorize agent...', 'info');
-
-      // Also create strategy config
       const maxPosBps = parseInt(createMaxPositionBps) || 3000;
       const stopLoss = parseInt(createStopLossBps) || 500;
       const interval = parseInt(createMinTradeInterval) || 30;
       const maxPos = parseInt(createMaxOpenPositions) || 3;
 
-      // We need the AdminCap from tx2 to create strategy — but we can't use it in the same PTB
-      // since create_admin_cap transfers it to sender. So we split into tx2 (admin_cap) and tx3 (strategy + auth).
+      // create_admin_cap_returning returns AdminCap (not transferred yet)
+      const [adminCap] = tx2.moveCall({
+        target: `${VAULT_PACKAGE_ID}::agent_auth::create_admin_cap_returning`,
+        arguments: [tx2.object(newVaultId)],
+      });
+
+      // Create strategy (authorized by tx sender, not AdminCap)
+      tx2.moveCall({
+        target: `${VAULT_PACKAGE_ID}::strategy::create_strategy`,
+        arguments: [
+          tx2.pure.id(newVaultId),
+          tx2.pure.u64(maxPosBps),
+          tx2.pure.u64(stopLoss),
+          tx2.pure.u64(interval),
+          tx2.pure.u64(maxPos),
+        ],
+      });
+
+      // Authorize the agent (if agent address is configured)
+      if (AGENT_ADDRESS) {
+        const maxTradeSize = BigInt(Math.floor((parseInt(createMaxTradeSize) || 10) * 1e9));
+        const maxDeployBps = parseInt(createMaxDeploymentBps) || 5000;
+
+        tx2.moveCall({
+          target: `${VAULT_PACKAGE_ID}::agent_auth::authorize_agent`,
+          arguments: [
+            adminCap,
+            tx2.object(newVaultId),
+            tx2.pure.address(AGENT_ADDRESS),
+            tx2.pure.u64(maxTradeSize),
+            tx2.pure.u64(maxDeployBps),
+          ],
+        });
+      }
+
+      // Transfer AdminCap to sender
+      tx2.transferObjects([adminCap], tx2.pure.address(account.address));
+
+      showToast('Sign transaction 2/2: Create admin cap + strategy + authorize agent...', 'info');
 
       const tx2Result = await new Promise<{ digest: string }>((resolve, reject) => {
         signAndExecute(
@@ -235,67 +295,6 @@ export default function AdminPage() {
 
       await suiClient.waitForTransaction({ digest: tx2Result.digest });
 
-      // Find the created AdminCap
-      const tx2Details = await suiClient.getTransactionBlock({
-        digest: tx2Result.digest,
-        options: { showObjectChanges: true },
-      });
-
-      const createdAdminCap = tx2Details.objectChanges?.find(
-        (change) => change.type === 'created' && change.objectType?.includes('::agent_auth::AdminCap'),
-      );
-
-      if (!createdAdminCap || createdAdminCap.type !== 'created') {
-        throw new Error('Could not find created AdminCap');
-      }
-
-      const newAdminCapId = createdAdminCap.objectId;
-
-      // TX3: create_strategy + authorize_agent (both need AdminCap)
-      const tx3 = new Transaction();
-
-      // Create strategy
-      tx3.moveCall({
-        target: `${VAULT_PACKAGE_ID}::strategy::create_strategy`,
-        arguments: [
-          tx3.object(newAdminCapId),
-          tx3.pure.id(newVaultId),
-          tx3.pure.u64(maxPosBps),
-          tx3.pure.u64(stopLoss),
-          tx3.pure.u64(interval),
-          tx3.pure.u64(maxPos),
-        ],
-      });
-
-      // Authorize the agent (if agent address is configured)
-      if (AGENT_ADDRESS) {
-        const maxTradeSize = BigInt(Math.floor((parseInt(createMaxTradeSize) || 10) * 1e9));
-        const maxDeployBps = parseInt(createMaxDeploymentBps) || 5000;
-
-        tx3.moveCall({
-          target: `${VAULT_PACKAGE_ID}::agent_auth::authorize_agent`,
-          arguments: [
-            tx3.object(newAdminCapId),
-            tx3.object(newVaultId),
-            tx3.pure.address(AGENT_ADDRESS),
-            tx3.pure.u64(maxTradeSize),
-            tx3.pure.u64(maxDeployBps),
-          ],
-        });
-      }
-
-      const tx3Result = await new Promise<{ digest: string }>((resolve, reject) => {
-        signAndExecute(
-          { transaction: tx3 as any },
-          {
-            onSuccess: (result) => resolve(result),
-            onError: (error) => reject(error),
-          },
-        );
-      });
-
-      await suiClient.waitForTransaction({ digest: tx3Result.digest });
-
       showToast('Vault created with strategy and agent authorization!', 'success');
       await refreshVaults();
     } catch (error) {
@@ -306,7 +305,7 @@ export default function AdminPage() {
   };
 
   const handleUpdateParams = () => {
-    if (!account || !VAULT_PACKAGE_ID || !selectedVault?.adminCapId || !selectedVault?.strategyConfigId) {
+    if (!account || !VAULT_PACKAGE_ID || !selectedVault?.strategyConfigId) {
       showToast('Missing configuration or no vault selected.', 'error');
       return;
     }
@@ -330,7 +329,6 @@ export default function AdminPage() {
     tx.moveCall({
       target: `${VAULT_PACKAGE_ID}::strategy::update_params`,
       arguments: [
-        tx.object(selectedVault.adminCapId),
         tx.object(selectedVault.strategyConfigId),
         tx.pure.u64(maxPosBps),
         tx.pure.u64(stopLoss),
@@ -356,14 +354,13 @@ export default function AdminPage() {
   };
 
   const handleToggleStrategy = (active: boolean) => {
-    if (!account || !VAULT_PACKAGE_ID || !selectedVault?.adminCapId || !selectedVault?.strategyConfigId) return;
+    if (!account || !VAULT_PACKAGE_ID || !selectedVault?.strategyConfigId) return;
 
     setTxPending(true);
     const tx = new Transaction();
     tx.moveCall({
       target: `${VAULT_PACKAGE_ID}::strategy::set_active`,
       arguments: [
-        tx.object(selectedVault.adminCapId),
         tx.object(selectedVault.strategyConfigId),
         tx.pure.bool(active),
       ],
@@ -414,6 +411,71 @@ export default function AdminPage() {
     );
   };
 
+  const handleSetPerformanceFee = () => {
+    if (!account || !VAULT_PACKAGE_ID || !selectedVault?.adminCapId || !selectedVault?.vaultId) return;
+
+    const feeBps = parseInt(formPerformanceFeeBps);
+    if (isNaN(feeBps) || feeBps < 0 || feeBps > 5000) {
+      showToast('Fee must be between 0 and 5000 bps (0-50%)', 'error');
+      return;
+    }
+
+    setTxPending(true);
+    const tx = new Transaction();
+    tx.moveCall({
+      target: `${VAULT_PACKAGE_ID}::agent_auth::set_performance_fee`,
+      arguments: [
+        tx.object(selectedVault.adminCapId),
+        tx.object(selectedVault.vaultId),
+        tx.pure.u64(feeBps),
+      ],
+    });
+
+    signAndExecute(
+      { transaction: tx as any },
+      {
+        onSuccess: () => {
+          setTxPending(false);
+          showToast(`Performance fee set to ${(feeBps / 100).toFixed(1)}%`, 'success');
+          fetchOnChainData();
+        },
+        onError: (error) => {
+          setTxPending(false);
+          showToast(`Set fee failed: ${error.message}`, 'error');
+        },
+      },
+    );
+  };
+
+  const handleWithdrawFees = () => {
+    if (!account || !VAULT_PACKAGE_ID || !selectedVault?.adminCapId || !selectedVault?.vaultId) return;
+
+    setTxPending(true);
+    const tx = new Transaction();
+    tx.moveCall({
+      target: `${VAULT_PACKAGE_ID}::agent_auth::withdraw_fees`,
+      arguments: [
+        tx.object(selectedVault.adminCapId),
+        tx.object(selectedVault.vaultId),
+      ],
+    });
+
+    signAndExecute(
+      { transaction: tx as any },
+      {
+        onSuccess: () => {
+          setTxPending(false);
+          showToast('Fees withdrawn successfully', 'success');
+          fetchOnChainData();
+        },
+        onError: (error) => {
+          setTxPending(false);
+          showToast(`Withdraw fees failed: ${error.message}`, 'error');
+        },
+      },
+    );
+  };
+
   if (!account) {
     return (
       <div className="space-y-8">
@@ -447,74 +509,75 @@ export default function AdminPage() {
       {/* Create Vault Section */}
       <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
         <h3 className="text-lg font-semibold mb-1">Create New Vault</h3>
-        <p className="text-xs text-gray-500 mb-4">
-          Create a new vault, configure strategy parameters, and authorize the agent to trade on your behalf.
-          {AGENT_ADDRESS && (
-            <span className="block mt-1">
-              Agent address: <span className="font-mono text-gray-400">{AGENT_ADDRESS.slice(0, 16)}...{AGENT_ADDRESS.slice(-8)}</span>
-            </span>
-          )}
+        <p className="text-sm text-gray-400 mb-6">
+          Set up your AI-managed trading vault. The agent will trade on your behalf within the safety limits you define below.
+          All limits are enforced by smart contracts — the agent physically cannot exceed them.
         </p>
 
-        <div className="grid sm:grid-cols-3 gap-4 mb-4">
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">Max Position (bps)</label>
-            <input
-              type="number" min="0" max="10000" step="100"
-              value={createMaxPositionBps}
-              onChange={(e) => setCreateMaxPositionBps(e.target.value)}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sage-500"
-              placeholder="3000"
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">Stop-Loss (bps)</label>
-            <input
-              type="number" min="0" max="10000" step="50"
-              value={createStopLossBps}
-              onChange={(e) => setCreateStopLossBps(e.target.value)}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sage-500"
-              placeholder="500"
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">Trade Interval (sec)</label>
-            <input
-              type="number" min="0" step="10"
-              value={createMinTradeInterval}
-              onChange={(e) => setCreateMinTradeInterval(e.target.value)}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sage-500"
-              placeholder="30"
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">Max Open Positions</label>
-            <input
-              type="number" min="1" step="1"
-              value={createMaxOpenPositions}
-              onChange={(e) => setCreateMaxOpenPositions(e.target.value)}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sage-500"
-              placeholder="3"
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">Max Trade Size (SUI)</label>
-            <input
-              type="number" min="0" step="1"
+        {/* Risk Limits */}
+        <div className="mb-6">
+          <h4 className="text-sm font-medium text-gray-300 mb-3">Safety Limits</h4>
+          <div className="grid sm:grid-cols-2 gap-4">
+            <FormField
+              label="Max Trade Size"
+              hint="The most SUI the agent can trade in a single order. Start small."
+              suffix="SUI"
               value={createMaxTradeSize}
-              onChange={(e) => setCreateMaxTradeSize(e.target.value)}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sage-500"
+              onChange={setCreateMaxTradeSize}
+              min={1} max={1000} step={1}
               placeholder="10"
             />
+            <FormField
+              label="Max Position Size"
+              hint="Largest portion of your vault the agent can put into one trade."
+              suffix="%"
+              value={String(parseInt(createMaxPositionBps) / 100 || 30)}
+              onChange={(v) => setCreateMaxPositionBps(String(Math.round(parseFloat(v) * 100)))}
+              min={1} max={100} step={1}
+              placeholder="30"
+            />
+            <FormField
+              label="Stop-Loss Trigger"
+              hint="If a position drops by this much, the agent will cut losses."
+              suffix="%"
+              value={String(parseInt(createStopLossBps) / 100 || 5)}
+              onChange={(v) => setCreateStopLossBps(String(Math.round(parseFloat(v) * 100)))}
+              min={1} max={50} step={1}
+              placeholder="5"
+            />
+            <FormField
+              label="Max Vault Deployed"
+              hint="Maximum portion of your vault the agent can have actively trading at once."
+              suffix="%"
+              value={String(parseInt(createMaxDeploymentBps) / 100 || 50)}
+              onChange={(v) => setCreateMaxDeploymentBps(String(Math.round(parseFloat(v) * 100)))}
+              min={1} max={100} step={1}
+              placeholder="50"
+            />
           </div>
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">Max Deployment (bps)</label>
-            <input
-              type="number" min="0" max="10000" step="100"
-              value={createMaxDeploymentBps}
-              onChange={(e) => setCreateMaxDeploymentBps(e.target.value)}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sage-500"
-              placeholder="5000"
+        </div>
+
+        {/* Trading Behavior */}
+        <div className="mb-6">
+          <h4 className="text-sm font-medium text-gray-300 mb-3">Trading Behavior</h4>
+          <div className="grid sm:grid-cols-2 gap-4">
+            <FormField
+              label="Cooldown Between Trades"
+              hint="Minimum wait time between trades. Prevents the agent from overtrading."
+              suffix="seconds"
+              value={createMinTradeInterval}
+              onChange={setCreateMinTradeInterval}
+              min={10} step={10}
+              placeholder="30"
+            />
+            <FormField
+              label="Max Simultaneous Trades"
+              hint="How many open positions the agent can hold at the same time."
+              suffix="trades"
+              value={createMaxOpenPositions}
+              onChange={setCreateMaxOpenPositions}
+              min={1} max={10} step={1}
+              placeholder="3"
             />
           </div>
         </div>
@@ -522,13 +585,18 @@ export default function AdminPage() {
         <button
           onClick={handleCreateVault}
           disabled={creatingVault || isPending || !VAULT_PACKAGE_ID}
-          className="px-6 py-2.5 bg-sage-600 hover:bg-sage-700 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg font-medium transition-colors"
+          className="px-6 py-3 bg-sage-600 hover:bg-sage-700 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg font-medium transition-colors text-sm"
         >
           {creatingVault ? <Spinner text="Creating Vault..." /> : 'Create Vault'}
         </button>
 
+        {AGENT_ADDRESS && (
+          <p className="text-xs text-gray-500 mt-3">
+            The SuiSage agent will be automatically authorized to trade for this vault.
+          </p>
+        )}
         {!AGENT_ADDRESS && (
-          <p className="text-xs text-yellow-500 mt-2">
+          <p className="text-xs text-yellow-500 mt-3">
             Set NEXT_PUBLIC_AGENT_ADDRESS to auto-authorize the agent during vault creation.
           </p>
         )}
@@ -619,91 +687,138 @@ export default function AdminPage() {
             </div>
           </div>
 
+          {/* Performance Fee & Vault Economics */}
+          <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
+            <h3 className="text-lg font-semibold mb-1">Vault Performance</h3>
+            <p className="text-sm text-gray-400 mb-6">
+              Track your vault's profits and manage the performance fee. The fee is only charged on new profits — never on your principal.
+            </p>
+
+            <div className="grid sm:grid-cols-4 gap-4 mb-6">
+              <div className="bg-gray-800/50 rounded-lg p-4">
+                <p className="text-xs text-gray-400 mb-1">Share Value</p>
+                <p className="text-lg font-bold">{vaultData?.navPerShare ?? '--'}</p>
+                <p className="text-xs text-gray-600">1.0 = starting value</p>
+              </div>
+              <div className="bg-gray-800/50 rounded-lg p-4">
+                <p className="text-xs text-gray-400 mb-1">Total Profit</p>
+                <p className="text-lg font-bold text-green-400">{vaultData?.totalProfit ?? '--'} SUI</p>
+              </div>
+              <div className="bg-gray-800/50 rounded-lg p-4">
+                <p className="text-xs text-gray-400 mb-1">Total Loss</p>
+                <p className="text-lg font-bold text-red-400">{vaultData?.totalLoss ?? '--'} SUI</p>
+              </div>
+              <div className="bg-gray-800/50 rounded-lg p-4">
+                <p className="text-xs text-gray-400 mb-1">Fees Earned</p>
+                <p className="text-lg font-bold">{vaultData?.accruedFees ?? '--'} SUI</p>
+              </div>
+            </div>
+
+            <div className="grid sm:grid-cols-2 gap-6">
+              <div>
+                <label className="block text-sm text-gray-300 mb-1">Performance Fee</label>
+                <p className="text-xs text-gray-500 mb-2">
+                  Percentage of profits taken as a fee. Only charged on gains above the previous high.
+                </p>
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <input
+                      type="number" min="0" max="50" step="1"
+                      value={String(parseInt(formPerformanceFeeBps) / 100 || '')}
+                      onChange={(e) => setFormPerformanceFeeBps(String(Math.round(parseFloat(e.target.value) * 100)))}
+                      className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 pr-8 text-white focus:outline-none focus:border-sage-500 transition-colors"
+                      placeholder="10"
+                    />
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm">%</span>
+                  </div>
+                  <button
+                    onClick={handleSetPerformanceFee}
+                    disabled={txPending || isPending}
+                    className="px-4 py-2.5 bg-sage-600 hover:bg-sage-700 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg font-medium text-sm transition-colors"
+                  >
+                    Update
+                  </button>
+                </div>
+                {vaultData && (
+                  <p className="text-xs text-gray-500 mt-1">
+                    Currently: {(vaultData.performanceFeeBps / 100).toFixed(1)}%
+                  </p>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm text-gray-300 mb-1">Collect Fees</label>
+                <p className="text-xs text-gray-500 mb-2">
+                  Transfer earned performance fees to your wallet.
+                </p>
+                <button
+                  onClick={handleWithdrawFees}
+                  disabled={txPending || isPending || !vaultData || vaultData.accruedFees === '0.0000'}
+                  className="px-6 py-2.5 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 rounded-lg font-medium text-sm transition-colors"
+                >
+                  {txPending ? <Spinner text="Collecting..." /> : `Collect ${vaultData?.accruedFees ?? '0'} SUI`}
+                </button>
+              </div>
+            </div>
+          </div>
+
           {/* Strategy Parameters Form */}
           {selectedVault?.strategyConfigId && (
             <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
-              <h3 className="text-lg font-semibold mb-1">Strategy Parameters</h3>
-              <p className="text-xs text-gray-500 mb-6">
-                These values are enforced on-chain. The agent reads them each cycle and the guardian validates trades against them.
+              <h3 className="text-lg font-semibold mb-1">Strategy Settings</h3>
+              <p className="text-sm text-gray-400 mb-6">
+                Adjust the agent's trading rules. Changes take effect on the next trading cycle. All limits are enforced by the smart contract.
               </p>
 
-              <div className="grid sm:grid-cols-2 gap-6">
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">
-                    Max Position Size (basis points)
-                  </label>
-                  <p className="text-xs text-gray-600 mb-2">
-                    Maximum % of vault for one trade. 3000 = 30%.
-                  </p>
-                  <input
-                    type="number" min="0" max="10000" step="100"
-                    value={formMaxPositionBps}
-                    onChange={(e) => setFormMaxPositionBps(e.target.value)}
-                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-sage-500 transition-colors"
-                    placeholder="3000"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">
-                    Stop-Loss Threshold (basis points)
-                  </label>
-                  <p className="text-xs text-gray-600 mb-2">
-                    Loss threshold to trigger stop. 500 = 5%.
-                  </p>
-                  <input
-                    type="number" min="0" max="10000" step="50"
-                    value={formStopLossBps}
-                    onChange={(e) => setFormStopLossBps(e.target.value)}
-                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-sage-500 transition-colors"
-                    placeholder="500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">
-                    Min Trade Interval (seconds)
-                  </label>
-                  <p className="text-xs text-gray-600 mb-2">
-                    Cooldown between trades. Prevents overtrading.
-                  </p>
-                  <input
-                    type="number" min="0" step="10"
-                    value={formMinTradeInterval}
-                    onChange={(e) => setFormMinTradeInterval(e.target.value)}
-                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-sage-500 transition-colors"
-                    placeholder="30"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">
-                    Max Open Positions
-                  </label>
-                  <p className="text-xs text-gray-600 mb-2">
-                    Maximum concurrent open positions allowed.
-                  </p>
-                  <input
-                    type="number" min="1" step="1"
-                    value={formMaxOpenPositions}
-                    onChange={(e) => setFormMaxOpenPositions(e.target.value)}
-                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-sage-500 transition-colors"
-                    placeholder="3"
-                  />
-                </div>
+              <div className="grid sm:grid-cols-2 gap-4">
+                <FormField
+                  label="Max Position Size"
+                  hint="Largest portion of your vault the agent can put into one trade."
+                  suffix="%"
+                  value={String(parseInt(formMaxPositionBps) / 100 || '')}
+                  onChange={(v) => setFormMaxPositionBps(String(Math.round(parseFloat(v) * 100)))}
+                  min={1} max={100} step={1}
+                  placeholder="30"
+                />
+                <FormField
+                  label="Stop-Loss Trigger"
+                  hint="If a position drops by this much, the agent will cut losses."
+                  suffix="%"
+                  value={String(parseInt(formStopLossBps) / 100 || '')}
+                  onChange={(v) => setFormStopLossBps(String(Math.round(parseFloat(v) * 100)))}
+                  min={1} max={50} step={1}
+                  placeholder="5"
+                />
+                <FormField
+                  label="Cooldown Between Trades"
+                  hint="Minimum wait time between trades. Prevents the agent from overtrading."
+                  suffix="seconds"
+                  value={formMinTradeInterval}
+                  onChange={setFormMinTradeInterval}
+                  min={10} step={10}
+                  placeholder="30"
+                />
+                <FormField
+                  label="Max Simultaneous Trades"
+                  hint="How many open positions the agent can hold at the same time."
+                  suffix="trades"
+                  value={formMaxOpenPositions}
+                  onChange={setFormMaxOpenPositions}
+                  min={1} max={10} step={1}
+                  placeholder="3"
+                />
               </div>
 
               <div className="mt-6 flex items-center gap-4">
                 <button
                   onClick={handleUpdateParams}
                   disabled={txPending || isPending}
-                  className="px-6 py-2.5 bg-sage-600 hover:bg-sage-700 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg font-medium transition-colors"
+                  className="px-6 py-2.5 bg-sage-600 hover:bg-sage-700 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg font-medium transition-colors text-sm"
                 >
-                  {txPending ? <Spinner text="Updating..." /> : 'Update Parameters'}
+                  {txPending ? <Spinner text="Updating..." /> : 'Save Changes'}
                 </button>
                 {strategyConfig && (
                   <span className="text-xs text-gray-500">
-                    Current: {strategyConfig.maxPositionBps}bps / {strategyConfig.stopLossBps}bps / {strategyConfig.minTradeIntervalSec}s / {strategyConfig.maxOpenPositions} pos
+                    Current: {(strategyConfig.maxPositionBps / 100).toFixed(0)}% position / {(strategyConfig.stopLossBps / 100).toFixed(0)}% stop-loss / {strategyConfig.minTradeIntervalSec}s cooldown / {strategyConfig.maxOpenPositions} max trades
                   </span>
                 )}
               </div>
@@ -748,6 +863,48 @@ function Spinner({ text }: { text: string }) {
       <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
       {text}
     </span>
+  );
+}
+
+function FormField({
+  label,
+  hint,
+  suffix,
+  value,
+  onChange,
+  min,
+  max,
+  step,
+  placeholder,
+}: {
+  label: string;
+  hint: string;
+  suffix: string;
+  value: string;
+  onChange: (v: string) => void;
+  min?: number;
+  max?: number;
+  step?: number;
+  placeholder: string;
+}) {
+  return (
+    <div>
+      <label className="block text-sm text-gray-300 mb-1">{label}</label>
+      <p className="text-xs text-gray-500 mb-2">{hint}</p>
+      <div className="relative">
+        <input
+          type="number"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 pr-16 text-sm text-white focus:outline-none focus:border-sage-500 transition-colors"
+          placeholder={placeholder}
+        />
+        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 text-xs">{suffix}</span>
+      </div>
+    </div>
   );
 }
 

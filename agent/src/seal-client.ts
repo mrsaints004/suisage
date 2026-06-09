@@ -53,7 +53,7 @@ export async function initSeal(): Promise<boolean> {
           weight: 1,
         },
       ],
-      verifyKeyServers: false, // testnet — skip verification
+      verifyKeyServers: config.suiNetwork === 'mainnet',
     });
 
     console.log('[Seal] Initialized — reasoning will be encrypted before Walrus storage');

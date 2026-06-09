@@ -22,12 +22,12 @@ export const DEEPBOOK_SUI_USDC_POOL = '0x4405b50d791fd3346754e8171aaab6bc2ed26c2
 export const SUI_COIN_TYPE = '0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI';
 export const WUSDC_COIN_TYPE = '0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN';
 
-// Walrus endpoints (testnet - Walrus mainnet not yet available)
-export const WALRUS_AGGREGATOR_URL = 'https://aggregator.walrus-testnet.walrus.space';
-export const WALRUS_PUBLISHER_URL = 'https://publisher.walrus-testnet.walrus.space';
+// Walrus endpoints (mainnet — override via env vars if mainnet unavailable)
+export const WALRUS_AGGREGATOR_URL = 'https://aggregator.walrus.space';
+export const WALRUS_PUBLISHER_URL = 'https://publisher.walrus.space';
 
-// Reasoning log version
-export const REASONING_LOG_VERSION = '2.0.0';
+// Reasoning log version (4.0: on-chain guardian, reasoning hash, performance fees)
+export const REASONING_LOG_VERSION = '4.0.0';
 
 // Guardian thresholds
 export const GUARDIAN_DEFAULTS = {

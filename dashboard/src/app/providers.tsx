@@ -8,6 +8,8 @@ import { OnboardingModal } from './components/OnboardingModal';
 import { VaultProvider } from './context/VaultContext';
 import '@mysten/dapp-kit/dist/index.css';
 
+const NETWORK = (process.env.NEXT_PUBLIC_SUI_NETWORK as 'testnet' | 'mainnet') || 'testnet';
+
 const { networkConfig } = createNetworkConfig({
   testnet: { url: getFullnodeUrl('testnet') },
   mainnet: { url: getFullnodeUrl('mainnet') },
@@ -18,7 +20,7 @@ const queryClient = new QueryClient();
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
-      <SuiClientProvider networks={networkConfig} defaultNetwork="mainnet">
+      <SuiClientProvider networks={networkConfig} defaultNetwork={NETWORK}>
         <WalletProvider autoConnect>
           <ToastProvider>
             <VaultProvider>

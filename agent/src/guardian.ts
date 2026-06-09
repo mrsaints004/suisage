@@ -1,11 +1,14 @@
 /**
- * Guardian: Pre-trade risk validation layer.
+ * Guardian: Dual-Layer Risk Validation
  *
- * This is what makes SuiSage more than a "generic LLM wrapper."
- * The guardian runs automated risk checks BEFORE any trade executes,
- * and the check results are stored in the Walrus reasoning log.
+ * LAYER 1 (this file): TypeScript pre-flight checks run BEFORE building the transaction.
+ * These provide fast feedback and detailed error messages for the reasoning log.
  *
- * Checks:
+ * LAYER 2 (agent_auth.move): Move on-chain checks run DURING transaction execution.
+ * These are the hard enforcement — even if this TypeScript layer is bypassed (e.g., by
+ * someone forking the agent), the Move contract will abort the transaction.
+ *
+ * TypeScript checks (8):
  * 1. Budget ceiling — trade size within AgentCap limits
  * 2. Spread check — reject if spread too wide (illiquid)
  * 3. Position concentration — don't over-allocate to one trade
@@ -14,6 +17,12 @@
  * 6. Cooldown — prevent overtrading
  * 7. Slippage estimate — reject if expected slippage too high
  * 8. Vault health — don't trade if vault is in bad state
+ *
+ * Move checks (7, enforced in withdraw_for_trading):
+ * - Agent active, vault not paused, strategy active
+ * - Trade size ≤ max_trade_size, deployment ≤ max_deployment_bps
+ * - Position concentration ≤ max_position_bps (from StrategyConfig)
+ * - Cooldown via sui::clock::Clock (min_trade_interval_sec)
  */
 
 import { config } from './config.js';
@@ -249,9 +258,18 @@ function calculateRiskLevel(checks: RiskCheckResult[], decision: TradeDecision):
  */
 export async function validateOnChain(
   decision: TradeDecision,
+  agentCapId?: string,
+  vaultObjectId?: string,
 ): Promise<{ valid: boolean; error?: string }> {
-  if (decision.action === 'HOLD' || !config.agentCapId || !config.vaultObjectId) {
+  const capId = agentCapId || config.agentCapId;
+  const vaultId = vaultObjectId || config.vaultObjectId;
+
+  if (decision.action === 'HOLD') {
     return { valid: true };
+  }
+
+  if (!capId || !vaultId) {
+    return { valid: false, error: 'Missing agentCapId or vaultObjectId for on-chain validation' };
   }
 
   try {
@@ -262,7 +280,7 @@ export async function validateOnChain(
     tx.moveCall({
       target: `${config.vaultPackageId}::agent_auth::validate_trade_size`,
       arguments: [
-        tx.object(config.agentCapId),
+        tx.object(capId),
         tx.pure.u64(quantityMist),
       ],
     });

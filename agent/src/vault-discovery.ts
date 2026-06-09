@@ -48,7 +48,7 @@ export async function discoverManagedVaults(): Promise<ManagedVault[]> {
   const strategyMap = new Map<string, string>();
 
   try {
-    let cursor: string | null | undefined = undefined;
+    let cursor: { txDigest: string; eventSeq: string } | null | undefined = undefined;
     let hasMore = true;
 
     while (hasMore) {
@@ -72,7 +72,7 @@ export async function discoverManagedVaults(): Promise<ManagedVault[]> {
       }
 
       hasMore = events.hasNextPage;
-      cursor = events.nextCursor;
+      cursor = events.nextCursor ?? null;
     }
   } catch (error) {
     console.warn('[Discovery] Could not query StrategyCreatedEvent events:', error);

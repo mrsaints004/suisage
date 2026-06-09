@@ -35,18 +35,34 @@ if (config.accountCapId) {
   console.log(`[Client] DeepBook AccountCap set: ${config.accountCapId}`);
 }
 
-// Execute a transaction
+// Execute a transaction with retry logic (max 2 retries, exponential backoff)
 export async function executeTransaction(tx: Transaction) {
-  const result = await suiClient.signAndExecuteTransaction({
-    signer: keypair,
-    transaction: tx,
-    options: {
-      showEffects: true,
-      showEvents: true,
-      showObjectChanges: true,
-    },
-  });
-  return result;
+  const maxRetries = 2;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await suiClient.signAndExecuteTransaction({
+        signer: keypair,
+        transaction: tx,
+        options: {
+          showEffects: true,
+          showEvents: true,
+          showObjectChanges: true,
+        },
+      });
+      return result;
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxRetries) {
+        const delayMs = 1000 * Math.pow(2, attempt); // 1s, 2s
+        console.warn(`[Client] Transaction attempt ${attempt + 1} failed, retrying in ${delayMs}ms...`, error);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+
+  throw lastError;
 }
 
 /**

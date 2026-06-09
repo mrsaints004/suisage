@@ -65,7 +65,7 @@ export function useUserVaults() {
       // Step 2: Query StrategyCreatedEvent to find strategy_config_id for each vault
       const strategyMap = new Map<string, string>();
       try {
-        let cursor: string | null | undefined = undefined;
+        let cursor: { txDigest: string; eventSeq: string } | null | undefined = undefined;
         let hasMore = true;
 
         while (hasMore) {
@@ -88,7 +88,7 @@ export function useUserVaults() {
           }
 
           hasMore = events.hasNextPage;
-          cursor = events.nextCursor;
+          cursor = events.nextCursor ?? null;
         }
       } catch {
         // Strategy events may not exist yet
@@ -105,13 +105,21 @@ export function useUserVaults() {
 
           if (vaultObj.data?.content && vaultObj.data.content.dataType === 'moveObject') {
             const fields = vaultObj.data.content.fields as Record<string, unknown>;
+            const rawBalance = fields.balance;
+            const balanceVal = typeof rawBalance === 'object' && rawBalance !== null && 'value' in (rawBalance as any)
+              ? Number(String((rawBalance as any).value))
+              : Number(String(rawBalance ?? '0'));
+            const rawDeployed = fields.deployed_amount;
+            const deployedVal = typeof rawDeployed === 'object' && rawDeployed !== null && 'value' in (rawDeployed as any)
+              ? Number(String((rawDeployed as any).value))
+              : Number(String(rawDeployed ?? '0'));
             results.push({
               vaultId: entry.vaultId,
               adminCapId: entry.adminCapId,
               strategyConfigId: strategyMap.get(entry.vaultId) ?? null,
-              balance: (Number(String(fields.balance ?? '0')) / 1e9).toFixed(4),
+              balance: (balanceVal / 1e9).toFixed(4),
               totalShares: String(fields.total_shares ?? '0'),
-              deployed: (Number(String(fields.deployed_amount ?? '0')) / 1e9).toFixed(4),
+              deployed: (deployedVal / 1e9).toFixed(4),
               paused: Boolean(fields.paused),
             });
           }

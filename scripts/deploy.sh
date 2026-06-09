@@ -4,7 +4,7 @@ set -e
 # SuiSage Contract Deployment Script
 # Usage: ./scripts/deploy.sh [mainnet|testnet]
 
-NETWORK="${1:-mainnet}"
+NETWORK="${1:-testnet}"
 CONTRACTS_DIR="$(cd "$(dirname "$0")/../contracts" && pwd)"
 
 echo ""
@@ -43,7 +43,7 @@ sui client gas --json 2>/dev/null | head -5 || echo "(could not check gas)"
 echo ""
 
 # Step 1: Publish contracts
-echo "[1/4] Publishing contracts..."
+echo "[1/5] Publishing contracts..."
 PUBLISH_OUTPUT=$(sui client publish "$CONTRACTS_DIR" \
   --gas-budget 200000000 \
   --json 2>&1)
@@ -69,7 +69,7 @@ echo "Package ID: $PACKAGE_ID"
 
 # Step 2: Create vault
 echo ""
-echo "[2/4] Creating vault..."
+echo "[2/5] Creating vault..."
 VAULT_OUTPUT=$(sui client call \
   --package "$PACKAGE_ID" \
   --module vault \
@@ -90,7 +90,7 @@ echo "Vault Object ID: $VAULT_OBJECT_ID"
 
 # Step 3: Create admin cap
 echo ""
-echo "[3/4] Creating admin cap..."
+echo "[3/5] Creating admin cap..."
 ADMIN_OUTPUT=$(sui client call \
   --package "$PACKAGE_ID" \
   --module agent_auth \
@@ -110,9 +110,31 @@ for change in data.get('objectChanges', []):
 
 echo "Admin Cap ID: $ADMIN_CAP_ID"
 
-# Step 4: Authorize agent
+# Step 4: Create strategy config
 echo ""
-echo "[4/4] Authorizing agent..."
+echo "[4/5] Creating strategy config..."
+STRATEGY_OUTPUT=$(sui client call \
+  --package "$PACKAGE_ID" \
+  --module strategy \
+  --function create_strategy \
+  --args "$VAULT_OBJECT_ID" "3000" "500" "30" "3" \
+  --gas-budget 50000000 \
+  --json 2>&1)
+
+STRATEGY_CONFIG_ID=$(echo "$STRATEGY_OUTPUT" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for change in data.get('objectChanges', []):
+    if change.get('type') == 'created' and 'StrategyConfig' in change.get('objectType', ''):
+        print(change['objectId'])
+        break
+" 2>/dev/null || echo "")
+
+echo "Strategy Config ID: $STRATEGY_CONFIG_ID"
+
+# Step 5: Authorize agent
+echo ""
+echo "[5/5] Authorizing agent..."
 
 # Read agent address from .env if exists, otherwise use active address
 ENV_FILE="$(cd "$(dirname "$0")/.." && pwd)/.env"
@@ -156,6 +178,7 @@ echo ""
 echo "VAULT_PACKAGE_ID=$PACKAGE_ID"
 echo "VAULT_OBJECT_ID=$VAULT_OBJECT_ID"
 echo "AGENT_CAP_ID=$AGENT_CAP_ID"
+echo "STRATEGY_CONFIG_ID=$STRATEGY_CONFIG_ID"
 echo ""
 echo "Also created (save for admin operations):"
 echo "ADMIN_CAP_ID=$ADMIN_CAP_ID"

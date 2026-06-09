@@ -10,6 +10,12 @@ import { useVaultContext } from '../context/VaultContext';
 import Link from 'next/link';
 
 const VAULT_PACKAGE_ID = process.env.NEXT_PUBLIC_VAULT_PACKAGE_ID || '';
+const SUI_NETWORK = process.env.NEXT_PUBLIC_SUI_NETWORK || 'mainnet';
+
+function getExplorerUrl(txDigest: string): string {
+  const network = SUI_NETWORK === 'mainnet' ? 'mainnet' : SUI_NETWORK;
+  return `https://suiscan.xyz/${network}/tx/${txDigest}`;
+}
 
 interface DepositReceiptInfo {
   objectId: string;
@@ -31,6 +37,11 @@ export default function PortfolioPage() {
     totalShares: string;
     deployed: string;
     paused: boolean;
+    navPerShare: string;
+    performanceFeeBps: number;
+    totalProfit: string;
+    totalLoss: string;
+    accruedFees: string;
   } | null>(null);
   const [loadingVault, setLoadingVault] = useState(false);
   const [txPending, setTxPending] = useState(false);
@@ -65,11 +76,38 @@ export default function PortfolioPage() {
         const obj = await suiClient.getObject({ id: vaultObjectId, options: { showContent: true } });
         if (obj.data?.content && obj.data.content.dataType === 'moveObject') {
           const fields = obj.data.content.fields as Record<string, unknown>;
+          const rawBalance = fields.balance;
+          const balanceVal = typeof rawBalance === 'object' && rawBalance !== null && 'value' in (rawBalance as any)
+            ? Number(String((rawBalance as any).value))
+            : Number(String(rawBalance ?? '0'));
+          const rawDeployed = fields.deployed_amount;
+          const deployedVal = typeof rawDeployed === 'object' && rawDeployed !== null && 'value' in (rawDeployed as any)
+            ? Number(String((rawDeployed as any).value))
+            : Number(String(rawDeployed ?? '0'));
+          const totalShares = BigInt(String(fields.total_shares ?? '0'));
+          const totalValue = balanceVal + deployedVal;
+          const navPerShare = totalShares > BigInt(0)
+            ? (BigInt(totalValue) * BigInt(1_000_000_000)) / totalShares
+            : BigInt(1_000_000_000);
+
+          const totalProfit = Number(String(fields.total_profit ?? '0'));
+          const totalLoss = Number(String(fields.total_loss ?? '0'));
+
+          const rawFees = fields.accrued_fees;
+          const accruedFees = typeof rawFees === 'object' && rawFees !== null && 'value' in (rawFees as any)
+            ? Number(String((rawFees as any).value))
+            : Number(String(rawFees ?? '0'));
+
           setVaultData({
-            balance: (Number(String(fields.balance ?? '0')) / 1e9).toFixed(4),
+            balance: (balanceVal / 1e9).toFixed(4),
             totalShares: String(fields.total_shares ?? '0'),
-            deployed: (Number(String(fields.deployed_amount ?? '0')) / 1e9).toFixed(4),
+            deployed: (deployedVal / 1e9).toFixed(4),
             paused: Boolean(fields.paused),
+            navPerShare: (Number(navPerShare) / 1e9).toFixed(6),
+            performanceFeeBps: Number(String(fields.performance_fee_bps ?? '1000')),
+            totalProfit: (totalProfit / 1e9).toFixed(4),
+            totalLoss: (totalLoss / 1e9).toFixed(4),
+            accruedFees: (accruedFees / 1e9).toFixed(4),
           });
         }
       } catch { setVaultData(null); }
@@ -265,9 +303,9 @@ export default function PortfolioPage() {
             </div>
             <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
               <p className="text-sm text-gray-400">
-                <Tooltip term="Available Balance" explanation="SUI sitting idle in the vault, not currently being traded" />
+                <Tooltip term="NAV / Share" explanation="Net Asset Value per share. Above 1.0 means the vault has generated profit." />
               </p>
-              <p className="text-2xl font-bold">{vaultData?.balance ?? '--'} <span className="text-sm text-gray-500">SUI</span></p>
+              <p className="text-2xl font-bold">{vaultData?.navPerShare ?? '--'}</p>
             </div>
             <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
               <p className="text-sm text-gray-400">
@@ -280,6 +318,40 @@ export default function PortfolioPage() {
               <p className={`text-2xl font-bold ${vaultData?.paused ? 'text-yellow-400' : 'text-sage-400'}`}>
                 {loadingVault ? '...' : vaultData?.paused ? 'Paused' : 'Active'}
               </p>
+            </div>
+          </div>
+
+          {/* Performance Stats */}
+          <div className="grid sm:grid-cols-4 gap-4">
+            <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
+              <p className="text-sm text-gray-400">
+                <Tooltip term="Available Balance" explanation="SUI sitting idle in the vault, not currently being traded" />
+              </p>
+              <p className="text-2xl font-bold">{vaultData?.balance ?? '--'} <span className="text-sm text-gray-500">SUI</span></p>
+            </div>
+            <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
+              <p className="text-sm text-gray-400">
+                <Tooltip term="Net P&L" explanation="Total profit minus total loss from all trading activity" />
+              </p>
+              {(() => {
+                const profit = parseFloat(vaultData?.totalProfit ?? '0');
+                const loss = parseFloat(vaultData?.totalLoss ?? '0');
+                const net = profit - loss;
+                const color = net > 0 ? 'text-green-400' : net < 0 ? 'text-red-400' : 'text-gray-400';
+                return <p className={`text-2xl font-bold ${color}`}>{net >= 0 ? '+' : ''}{net.toFixed(4)} <span className="text-sm text-gray-500">SUI</span></p>;
+              })()}
+            </div>
+            <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
+              <p className="text-sm text-gray-400">
+                <Tooltip term="Performance Fee" explanation="Fee rate charged on profits above the high-water mark NAV" />
+              </p>
+              <p className="text-2xl font-bold">{vaultData ? (vaultData.performanceFeeBps / 100).toFixed(1) : '--'}<span className="text-sm text-gray-500">%</span></p>
+            </div>
+            <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
+              <p className="text-sm text-gray-400">
+                <Tooltip term="Accrued Fees" explanation="Performance fees collected by the vault, withdrawable by admin" />
+              </p>
+              <p className="text-2xl font-bold">{vaultData?.accruedFees ?? '--'} <span className="text-sm text-gray-500">SUI</span></p>
             </div>
           </div>
 
@@ -388,7 +460,7 @@ export default function PortfolioPage() {
                 <p className="text-xs text-gray-400 font-mono mt-1">{lastTxDigest}</p>
               </div>
               <a
-                href={`https://suiscan.xyz/mainnet/tx/${lastTxDigest}`}
+                href={getExplorerUrl(lastTxDigest)}
                 target="_blank" rel="noopener noreferrer"
                 className="px-3 py-1.5 bg-green-800/30 hover:bg-green-800/50 text-green-400 rounded-lg text-xs transition-colors"
               >
@@ -416,16 +488,16 @@ export default function PortfolioPage() {
             <h3 className="text-lg font-semibold mb-4">Agent Architecture</h3>
             <div className="grid sm:grid-cols-3 gap-4 text-sm">
               <div className="bg-gray-800/50 rounded-lg p-4">
-                <p className="text-sage-400 font-medium mb-1">Guardian Risk Layer</p>
-                <p className="text-gray-400 text-xs">Every trade passes 8 automated risk checks before execution. Spread, depth, slippage, concentration, cooldown, budget ceiling, confidence floor, and vault health.</p>
+                <p className="text-sage-400 font-medium mb-1">Dual-Layer Guardian</p>
+                <p className="text-gray-400 text-xs">8 TypeScript pre-flight checks + 7 Move on-chain checks. Budget ceiling, cooldown (Clock), position concentration, and deployment limits are all enforced in Move — even a forked agent cannot bypass them.</p>
               </div>
               <div className="bg-gray-800/50 rounded-lg p-4">
-                <p className="text-sage-400 font-medium mb-1">Walrus Memory</p>
-                <p className="text-gray-400 text-xs">The agent reads its past decisions from Walrus and learns from outcomes. Win rate, patterns, and performance stats feed into each new decision.</p>
+                <p className="text-sage-400 font-medium mb-1">Verifiable Reasoning</p>
+                <p className="text-gray-400 text-xs">Every decision stored on Walrus with SHA-256 hash committed on-chain. Anyone can fetch the blob, re-hash it, and verify it matches — proving the reasoning was not tampered with.</p>
               </div>
               <div className="bg-gray-800/50 rounded-lg p-4">
-                <p className="text-sage-400 font-medium mb-1">On-Chain Enforcement</p>
-                <p className="text-gray-400 text-xs">Budget ceiling enforced by Move AgentCap object. Admin can revoke agent access instantly. Trade + record happen atomically in a single PTB.</p>
+                <p className="text-sage-400 font-medium mb-1">Performance Tracking</p>
+                <p className="text-gray-400 text-xs">High-water mark NAV tracking with performance fee on profits. Profit/loss accounting on-chain. Admin can adjust fee rate and withdraw accrued fees.</p>
               </div>
             </div>
           </div>
