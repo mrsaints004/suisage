@@ -45,7 +45,7 @@ let memwalEnabled = false;
  */
 export async function initMemWal(): Promise<boolean> {
   if (!MEMWAL_DELEGATE_KEY || !MEMWAL_ACCOUNT_ID) {
-    console.log('[MemWal] Not configured (set MEMWAL_DELEGATE_KEY and MEMWAL_ACCOUNT_ID)');
+    console.log('[MemWal] Not configured (set MEMWAL_DELEGATE_KEY and MEMWAL_ACCOUNT_ID). Semantic memory disabled — agent will use Walrus blob memory only.');
     return false;
   }
 
@@ -65,7 +65,7 @@ export async function initMemWal(): Promise<boolean> {
     memwalEnabled = true;
     return true;
   } catch (error) {
-    console.error('[MemWal] Initialization failed:', error);
+    console.warn('[MemWal] Initialization failed (non-fatal, semantic memory disabled):', error instanceof Error ? error.message : error);
     memwalEnabled = false;
     return false;
   }
@@ -107,7 +107,7 @@ export async function rememberTrade(
     console.log(`[MemWal] Trade remembered (job: ${result.job_id})`);
     return result.job_id;
   } catch (error) {
-    console.error('[MemWal] Failed to remember trade:', error);
+    console.warn('[MemWal] Failed to remember trade (non-fatal):', error instanceof Error ? error.message : error);
     return null;
   }
 }
@@ -123,7 +123,7 @@ export async function rememberPattern(pattern: string): Promise<string | null> {
     console.log(`[MemWal] Pattern remembered (job: ${result.job_id})`);
     return result.job_id;
   } catch (error) {
-    console.error('[MemWal] Failed to remember pattern:', error);
+    console.warn('[MemWal] Failed to remember pattern (non-fatal):', error instanceof Error ? error.message : error);
     return null;
   }
 }
@@ -136,7 +136,7 @@ export async function shareWithAgents(intelligence: string): Promise<string | nu
   if (!memwalInstance) return null;
 
   const sharedMemory = [
-    `[Agent: ${config.suiNetwork}]`,
+    `[Agent: ${config.suiNetwork}/${config.agentId || 'primary'}]`,
     intelligence,
     `Shared at: ${new Date().toISOString()}`,
   ].join('\n');
@@ -146,7 +146,7 @@ export async function shareWithAgents(intelligence: string): Promise<string | nu
     console.log(`[MemWal] Shared with agent network (job: ${result.job_id})`);
     return result.job_id;
   } catch (error) {
-    console.error('[MemWal] Failed to share:', error);
+    console.warn('[MemWal] Failed to share (non-fatal):', error instanceof Error ? error.message : error);
     return null;
   }
 }
@@ -168,7 +168,7 @@ export async function recallTrades(query: string, limit: number = 5): Promise<st
     console.log(`[MemWal] Recalled ${result.results.length} trade memories`);
     return result.results.map((r) => r.text);
   } catch (error) {
-    console.error('[MemWal] Failed to recall trades:', error);
+    console.warn('[MemWal] Failed to recall trades (non-fatal):', error instanceof Error ? error.message : error);
     return [];
   }
 }
@@ -189,7 +189,7 @@ export async function recallPatterns(query: string, limit: number = 5): Promise<
     console.log(`[MemWal] Recalled ${result.results.length} pattern memories`);
     return result.results.map((r) => r.text);
   } catch (error) {
-    console.error('[MemWal] Failed to recall patterns:', error);
+    console.warn('[MemWal] Failed to recall patterns (non-fatal):', error instanceof Error ? error.message : error);
     return [];
   }
 }
@@ -210,7 +210,7 @@ export async function recallSharedIntelligence(query: string, limit: number = 5)
     console.log(`[MemWal] Recalled ${result.results.length} shared memories from agent network`);
     return result.results.map((r) => r.text);
   } catch (error) {
-    console.error('[MemWal] Failed to recall shared intelligence:', error);
+    console.warn('[MemWal] Failed to recall shared intelligence (non-fatal):', error instanceof Error ? error.message : error);
     return [];
   }
 }
@@ -231,34 +231,41 @@ export async function buildMemWalContext(
   const parts: string[] = [];
   parts.push('=== MEMWAL PERSISTENT MEMORY (Walrus-backed, encrypted) ===');
 
-  // 1. Recall similar market conditions
-  const marketQuery = `market condition ${marketCondition} price around $${currentPrice.toFixed(2)} spread ${spreadBps.toFixed(0)} bps`;
-  const similarTrades = await recallTrades(marketQuery, 3);
-  if (similarTrades.length > 0) {
-    parts.push('\nSimilar past situations (semantic recall):');
-    for (const trade of similarTrades) {
-      parts.push(`  ${trade.substring(0, 200)}`);
-    }
-  }
+  try {
+    // Recall from all three namespaces in parallel for speed
+    const marketQuery = `market condition ${marketCondition} price around $${currentPrice.toFixed(2)} spread ${spreadBps.toFixed(0)} bps`;
+    const [similarTrades, patterns, shared] = await Promise.all([
+      recallTrades(marketQuery, 3),
+      recallPatterns(`${marketCondition} market trading pattern`, 3),
+      recallSharedIntelligence(`${marketCondition} SUI USDC trading insights`, 2),
+    ]);
 
-  // 2. Recall relevant patterns
-  const patternQuery = `${marketCondition} market trading pattern`;
-  const patterns = await recallPatterns(patternQuery, 3);
-  if (patterns.length > 0) {
-    parts.push('\nRelevant learned patterns:');
-    for (const pattern of patterns) {
-      parts.push(`  ${pattern.substring(0, 200)}`);
+    if (similarTrades.length > 0) {
+      parts.push('\nSimilar past situations (semantic recall):');
+      for (const trade of similarTrades) {
+        parts.push(`  ${trade.substring(0, 200)}`);
+      }
     }
-  }
 
-  // 3. Recall shared intelligence from other agents
-  const sharedQuery = `${marketCondition} SUI USDC trading insights`;
-  const shared = await recallSharedIntelligence(sharedQuery, 2);
-  if (shared.length > 0) {
-    parts.push('\nShared intelligence from agent network:');
-    for (const intel of shared) {
-      parts.push(`  ${intel.substring(0, 200)}`);
+    if (patterns.length > 0) {
+      parts.push('\nRelevant learned patterns:');
+      for (const pattern of patterns) {
+        parts.push(`  ${pattern.substring(0, 200)}`);
+      }
     }
+
+    if (shared.length > 0) {
+      parts.push('\nCross-agent shared intelligence:');
+      for (const intel of shared) {
+        parts.push(`  ${intel.substring(0, 200)}`);
+      }
+    }
+
+    if (similarTrades.length === 0 && patterns.length === 0 && shared.length === 0) {
+      parts.push('No relevant memories found for current conditions — building knowledge base.');
+    }
+  } catch (error) {
+    parts.push(`Memory recall error (non-fatal): ${error instanceof Error ? error.message : 'unknown'}`);
   }
 
   parts.push('\n=== END MEMWAL MEMORY ===');

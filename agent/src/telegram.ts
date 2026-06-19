@@ -1,5 +1,5 @@
 import { Bot, InlineKeyboard } from 'grammy';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import Groq from 'groq-sdk';
 import { config } from './config.js';
 import { agentAddress } from './client.js';
 import { readVaultState } from './vault-manager.js';
@@ -26,7 +26,7 @@ let recentLogs: Array<{
 let lastMarket: MarketSnapshot | null = null;
 let lastVault: VaultState | null = null;
 
-const genAI = new GoogleGenerativeAI(config.geminiApiKey);
+const groq = new Groq({ apiKey: config.groqApiKey });
 
 const SAGE_SYSTEM_PROMPT = `You are SuiSage, a friendly and knowledgeable AI trading assistant on the Sui blockchain. You help users understand what's happening with their vault, trades, and the market.
 
@@ -133,27 +133,28 @@ async function getAIResponse(chatId: number, userMessage: string): Promise<strin
   const liveContext = buildLiveContext();
 
   try {
-    const chatModel = genAI.getGenerativeModel({
-      model: 'gemini-2.0-flash',
-      systemInstruction: `${SAGE_SYSTEM_PROMPT}\n\n--- LIVE DATA ---\n${liveContext}`,
-    });
-
-    const chat = chatModel.startChat({
-      history: history.slice(0, -1).map((msg) => ({
-        role: msg.role === 'user' ? 'user' : 'model',
-        parts: [{ text: msg.content }],
+    const messages = [
+      { role: 'system' as const, content: `${SAGE_SYSTEM_PROMPT}\n\n--- LIVE DATA ---\n${liveContext}` },
+      ...history.map((msg) => ({
+        role: msg.role as 'user' | 'assistant',
+        content: msg.content,
       })),
+    ];
+
+    const response = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      max_tokens: 600,
+      messages,
     });
 
-    const result = await chat.sendMessage(userMessage);
-    const reply = result.response.text();
+    const reply = response.choices[0]?.message?.content ?? 'Sorry, I had trouble thinking about that.';
 
     // Add to history
     history.push({ role: 'assistant', content: reply });
 
     return reply;
   } catch (error) {
-    console.error('[Telegram] Gemini API error:', error);
+    console.error('[Telegram] Groq API error:', error);
     return "I'm having trouble connecting to my brain right now. Try again in a moment?";
   }
 }
@@ -553,16 +554,26 @@ export async function notifyTrade(
     .text('🔍 Full Reasoning', `reasoning:${walrusBlobId}`)
     .text('📊 Market Now', 'action:market');
 
+  // Build rich notification card
+  const priceInfo = lastMarket ? `\nSUI Price: $${lastMarket.midPrice.toFixed(4)} | Spread: ${lastMarket.spreadBps.toFixed(1)}bps` : '';
+  const vaultInfo = lastVault ? `\nVault: ${(Number(lastVault.totalValue) / Number(MIST_PER_SUI)).toFixed(2)} SUI` : '';
+  const riskEmoji = d.confidence >= 70 ? '🛡️ Low Risk' : d.confidence >= 40 ? '⚠️ Medium Risk' : '🔴 High Risk';
+
   const msg =
-    `${emoji} *New Decision: ${d.action}*\n\n` +
+    `${emoji} *${d.action}* | SuiSage Agent\n` +
+    `${'─'.repeat(28)}\n` +
     (d.action !== 'HOLD'
-      ? `${d.quantity} SUI @ $${d.price.toFixed(4)}\n`
-      : `Holding current positions\n`) +
-    `\n${conf} Confidence: ${d.confidence}%\n` +
-    `Market: ${d.marketCondition}\n\n` +
-    `💭 _${d.reasoning.substring(0, 200)}${d.reasoning.length > 200 ? '...' : ''}_\n\n` +
-    (txDigest ? `🔗 TX: \`${txDigest.slice(0, 20)}...\`\n` : '') +
-    `📦 Stored on Walrus for verification`;
+      ? `📊 ${d.quantity} SUI @ $${d.price.toFixed(4)}\n`
+      : `📊 Holding — no trade needed\n`) +
+    `\n*Confidence:* ${conf} ${d.confidence}%\n` +
+    `*Market:* ${d.marketCondition} ${priceInfo}\n` +
+    `*Risk:* ${riskEmoji}${vaultInfo}\n` +
+    `\n💭 *Reasoning:*\n_${d.reasoning.substring(0, 250)}${d.reasoning.length > 250 ? '...' : ''}_\n` +
+    `\n⚠️ *Risk Assessment:*\n_${d.riskAssessment.substring(0, 150)}${d.riskAssessment.length > 150 ? '...' : ''}_\n` +
+    `\n${'─'.repeat(28)}\n` +
+    (txDigest ? `🔗 [View TX](https://suiscan.xyz/${config.suiNetwork}/tx/${txDigest})\n` : '') +
+    `📦 Walrus: \`${walrusBlobId.slice(0, 20)}...\`\n` +
+    `🔒 SHA-256 hash committed on-chain`;
 
   for (const chatId of subscribedChats) {
     try {

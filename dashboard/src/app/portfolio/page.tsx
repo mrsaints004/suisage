@@ -5,6 +5,7 @@ import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from '@
 import { Transaction } from '@mysten/sui/transactions';
 import { useToast } from '../components/Toast';
 import { useVaultContext } from '../context/VaultContext';
+import { PerformanceChart } from '../components/PerformanceChart';
 import Link from 'next/link';
 
 const VAULT_PACKAGE_ID = process.env.NEXT_PUBLIC_VAULT_PACKAGE_ID || '';
@@ -45,6 +46,7 @@ export default function PortfolioPage() {
   const [loadingReceipts, setLoadingReceipts] = useState(false);
   const [selectedReceipt, setSelectedReceipt] = useState<string>('');
   const [withdrawShares, setWithdrawShares] = useState('');
+  const [recentActivity, setRecentActivity] = useState<{ type: 'deposit' | 'withdraw'; amount: string; timestamp: number; txDigest: string }[]>([]);
 
   const vaultObjectId = selectedVault?.vaultId ?? '';
 
@@ -137,6 +139,56 @@ export default function PortfolioPage() {
   }, [account, suiClient, selectedReceipt, vaultObjectId]);
 
   useEffect(() => { fetchReceipts(); }, [fetchReceipts]);
+
+  // Fetch deposit/withdraw events for recent activity
+  useEffect(() => {
+    if (!VAULT_PACKAGE_ID) return;
+    async function fetchActivity() {
+      try {
+        const [depositEvents, withdrawEvents] = await Promise.all([
+          suiClient.queryEvents({
+            query: { MoveEventType: `${VAULT_PACKAGE_ID}::vault::DepositEvent` },
+            limit: 10,
+            order: 'descending',
+          }),
+          suiClient.queryEvents({
+            query: { MoveEventType: `${VAULT_PACKAGE_ID}::vault::WithdrawEvent` },
+            limit: 10,
+            order: 'descending',
+          }),
+        ]);
+
+        const deposits = depositEvents.data.map((ev) => {
+          const fields = ev.parsedJson as Record<string, unknown>;
+          return {
+            type: 'deposit' as const,
+            amount: (Number(String(fields.amount ?? '0')) / 1e9).toFixed(4),
+            timestamp: Number(String(fields.timestamp_ms ?? ev.timestampMs ?? '0')),
+            txDigest: ev.id.txDigest,
+          };
+        });
+
+        const withdrawals = withdrawEvents.data.map((ev) => {
+          const fields = ev.parsedJson as Record<string, unknown>;
+          return {
+            type: 'withdraw' as const,
+            amount: (Number(String(fields.amount ?? '0')) / 1e9).toFixed(4),
+            timestamp: Number(String(fields.timestamp_ms ?? ev.timestampMs ?? '0')),
+            txDigest: ev.id.txDigest,
+          };
+        });
+
+        const combined = [...deposits, ...withdrawals]
+          .sort((a, b) => b.timestamp - a.timestamp)
+          .slice(0, 10);
+
+        setRecentActivity(combined);
+      } catch {
+        setRecentActivity([]);
+      }
+    }
+    fetchActivity();
+  }, [suiClient]);
 
   const handleDeposit = () => {
     if (!depositAmount || !account) return;
@@ -260,19 +312,26 @@ export default function PortfolioPage() {
 
       {/* Overview Cards */}
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Wallet Balance" value={`${walletBalance ?? '--'} SUI`} />
-        <StatCard label="Vault Balance" value={`${totalVaultSui} SUI`} />
+        <StatCard label="Wallet Balance" value={`${walletBalance ?? '--'} SUI`} loading={!walletBalance} />
+        <StatCard label="Vault Balance" value={`${totalVaultSui} SUI`} loading={loadingVault} />
         <StatCard
           label="Profit / Loss"
           value={`${netPnl >= 0 ? '+' : ''}${netPnl.toFixed(4)} SUI`}
           color={netPnl > 0 ? 'text-green-400' : netPnl < 0 ? 'text-red-400' : undefined}
+          loading={loadingVault}
         />
         <StatCard
           label="Agent Status"
-          value={loadingVault ? '...' : vaultData?.paused ? 'Paused' : 'Active'}
+          value={vaultData?.paused ? 'Paused' : 'Active'}
           color={vaultData?.paused ? 'text-yellow-400' : 'text-sage-400'}
+          loading={loadingVault}
         />
       </div>
+
+      {/* Performance Chart */}
+      {vaultObjectId && (
+        <PerformanceChart vaultId={vaultObjectId} packageId={VAULT_PACKAGE_ID} />
+      )}
 
       {!vaultObjectId ? (
         <div className="bg-gray-900 rounded-xl p-8 text-center border border-gray-800">
@@ -393,6 +452,42 @@ export default function PortfolioPage() {
             </div>
           )}
 
+          {/* Recent Activity */}
+          {recentActivity.length > 0 && (
+            <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
+              <h3 className="text-lg font-semibold mb-4">Recent Activity</h3>
+              <div className="space-y-2">
+                {recentActivity.map((entry, i) => (
+                  <div key={i} className="flex items-center justify-between py-2 border-b border-gray-800 last:border-0">
+                    <div className="flex items-center gap-3">
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                        entry.type === 'deposit'
+                          ? 'bg-green-500/20 text-green-400'
+                          : 'bg-red-500/20 text-red-400'
+                      }`}>
+                        {entry.type === 'deposit' ? 'Deposit' : 'Withdraw'}
+                      </span>
+                      <span className="text-sm">{entry.amount} SUI</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-gray-500">
+                        {entry.timestamp > 0 ? new Date(entry.timestamp).toLocaleDateString() : '--'}
+                      </span>
+                      <a
+                        href={getExplorerUrl(entry.txDigest)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-sage-400 hover:text-sage-300 transition-colors"
+                      >
+                        TX &rarr;
+                      </a>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Quick Links */}
           <div className="flex gap-3">
             <Link
@@ -414,11 +509,15 @@ export default function PortfolioPage() {
   );
 }
 
-function StatCard({ label, value, color }: { label: string; value: string; color?: string }) {
+function StatCard({ label, value, color, loading }: { label: string; value: string; color?: string; loading?: boolean }) {
   return (
     <div className="bg-gray-900 rounded-xl p-5 border border-gray-800">
       <p className="text-sm text-gray-400 mb-1">{label}</p>
-      <p className={`text-xl font-bold ${color ?? 'text-white'}`}>{value}</p>
+      {loading ? (
+        <div className="skeleton h-7 w-24" />
+      ) : (
+        <p className={`text-xl font-bold ${color ?? 'text-white'}`}>{value}</p>
+      )}
     </div>
   );
 }

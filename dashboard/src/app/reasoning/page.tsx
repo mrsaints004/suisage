@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useSuiClient } from '@mysten/dapp-kit';
 import type { ReasoningLog, TradeAction } from '@suisage/shared';
 
@@ -48,6 +48,7 @@ export default function ReasoningPage() {
   const [loadingReasoning, setLoadingReasoning] = useState<string | null>(null);
   const [hashVerification, setHashVerification] = useState<Record<string, 'verified' | 'mismatch' | 'pending'>>({});
   const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<'ALL' | 'BUY' | 'SELL'>('ALL');
 
   // Fetch trade events from chain
   useEffect(() => {
@@ -151,6 +152,21 @@ export default function ReasoningPage() {
     }
   }
 
+  const filteredRecords = useMemo(() => {
+    if (filter === 'ALL') return records;
+    return records.filter((r) => TRADE_TYPE_MAP[r.tradeType] === filter);
+  }, [records, filter]);
+
+  const stats = useMemo(() => {
+    const buys = records.filter((r) => TRADE_TYPE_MAP[r.tradeType] === 'BUY').length;
+    const sells = records.filter((r) => TRADE_TYPE_MAP[r.tradeType] === 'SELL').length;
+    const avgConf = records.length > 0
+      ? Math.round(records.reduce((sum, r) => sum + r.confidence, 0) / records.length)
+      : 0;
+    const approved = records.filter((r) => r.guardianApproved).length;
+    return { total: records.length, buys, sells, avgConf, approved };
+  }, [records]);
+
   return (
     <div className="space-y-8">
       <div>
@@ -161,6 +177,54 @@ export default function ReasoningPage() {
         </p>
       </div>
 
+      {/* Stats Summary */}
+      {!loading && records.length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+          <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
+            <p className="text-xs text-gray-500">Total Decisions</p>
+            <p className="text-xl font-bold">{stats.total}</p>
+          </div>
+          <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
+            <p className="text-xs text-gray-500">Buys</p>
+            <p className="text-xl font-bold text-green-400">{stats.buys}</p>
+          </div>
+          <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
+            <p className="text-xs text-gray-500">Sells</p>
+            <p className="text-xl font-bold text-red-400">{stats.sells}</p>
+          </div>
+          <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
+            <p className="text-xs text-gray-500">Avg Confidence</p>
+            <p className="text-xl font-bold">{stats.avgConf}%</p>
+          </div>
+          <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
+            <p className="text-xs text-gray-500">Guardian Approved</p>
+            <p className="text-xl font-bold text-sage-400">{stats.approved}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Filter Buttons */}
+      {!loading && records.length > 0 && (
+        <div className="flex gap-2">
+          {(['ALL', 'BUY', 'SELL'] as const).map((f) => {
+            const count = f === 'ALL' ? records.length : f === 'BUY' ? stats.buys : stats.sells;
+            return (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                  filter === f
+                    ? 'bg-sage-600 text-white'
+                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                }`}
+              >
+                {f} <span className="ml-1 opacity-70">{count}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {loading ? (
         <div className="text-center py-16">
           <div className="w-8 h-8 border-2 border-sage-500/30 border-t-sage-500 rounded-full animate-spin mx-auto mb-4" />
@@ -168,7 +232,7 @@ export default function ReasoningPage() {
         </div>
       ) : records.length === 0 ? (
         <div className="text-center py-16 bg-gray-900 rounded-xl border border-gray-800">
-          <span className="text-4xl mb-4 block">&#x1F4CA;</span>
+          <svg className="w-10 h-10 mx-auto mb-4 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" /></svg>
           <h2 className="text-xl font-semibold mb-2">No Trades Yet</h2>
           <p className="text-gray-400 text-sm max-w-md mx-auto mb-2">
             The agent hasn&apos;t executed any trades yet. Once it starts analyzing the market and trading,
@@ -185,7 +249,7 @@ export default function ReasoningPage() {
           <div className="absolute left-6 top-0 bottom-0 w-px bg-gray-800" />
 
           <div className="space-y-4">
-            {records.map((record, index) => {
+            {filteredRecords.map((record, index) => {
               const action = TRADE_TYPE_MAP[record.tradeType] || 'HOLD';
               const isExpanded = expandedIndex === index;
               const reasoning = reasoningData[record.walrusBlobId];

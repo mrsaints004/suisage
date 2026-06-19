@@ -11,7 +11,7 @@ export const TRADE_TYPE = {
 // Default agent loop interval
 export const DEFAULT_LOOP_INTERVAL_MS = 60_000;
 
-// DeepBook V2 constants
+// DeepBook constants
 export const DEEPBOOK_PACKAGE_ID = '0xdee9';
 export const FLOAT_SCALING_FACTOR = 1_000_000_000n;
 

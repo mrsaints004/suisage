@@ -7,20 +7,179 @@
   --background: #0a0a0a;
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 body {
   color: var(--foreground);
   background: var(--background);
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(22, 163, 74, 0.08), transparent),
+    radial-gradient(ellipse 60% 40% at 80% 100%, rgba(22, 163, 74, 0.04), transparent);
+  background-attachment: fixed;
   font-family: system-ui, -apple-system, sans-serif;
+}
+
+/* Card transitions */
+.card-hover {
+  @apply transition-all duration-300 ease-out;
+}
+.card-hover:hover {
+  @apply -translate-y-0.5 shadow-lg shadow-sage-900/10;
+}
+
+/* Pulse animation for live indicators */
+@keyframes live-pulse {
+  0%, 100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.5);
+  }
+  50% {
+    opacity: 0.7;
+    box-shadow: 0 0 0 6px rgba(34, 197, 94, 0);
+  }
+}
+.live-dot {
+  animation: live-pulse 2s ease-in-out infinite;
+}
+
+/* Flow arrow animation */
+@keyframes flow-dash {
+  to {
+    stroke-dashoffset: -20;
+  }
+}
+.flow-arrow {
+  animation: flow-dash 1.5s linear infinite;
+}
+
+/* Skeleton loading animation */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+.skeleton {
+  background: linear-gradient(90deg, #1f2937 25%, #374151 50%, #1f2937 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.8s ease-in-out infinite;
+  border-radius: 0.375rem;
+}
+
+/* Fade-in on mount */
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-fade-in-up {
+  animation: fade-in-up 0.5s ease-out forwards;
+}
+.animate-fade-in-up-d1 {
+  opacity: 0;
+  animation: fade-in-up 0.6s ease-out 0.1s forwards;
+}
+.animate-fade-in-up-d2 {
+  opacity: 0;
+  animation: fade-in-up 0.6s ease-out 0.2s forwards;
+}
+.animate-fade-in-up-d3 {
+  opacity: 0;
+  animation: fade-in-up 0.6s ease-out 0.3s forwards;
+}
+.animate-fade-in-up-d4 {
+  opacity: 0;
+  animation: fade-in-up 0.6s ease-out 0.4s forwards;
+}
+.animate-fade-in-up-d5 {
+  opacity: 0;
+  animation: fade-in-up 0.6s ease-out 0.5s forwards;
+}
+.animate-fade-in-up-d6 {
+  opacity: 0;
+  animation: fade-in-up 0.6s ease-out 0.6s forwards;
+}
+
+/* Subtle glow pulse for hero title */
+@keyframes glow-pulse {
+  0%, 100% {
+    text-shadow: 0 0 20px rgba(74, 222, 128, 0.15);
+  }
+  50% {
+    text-shadow: 0 0 40px rgba(74, 222, 128, 0.3);
+  }
+}
+.glow-text {
+  animation: glow-pulse 3s ease-in-out infinite;
+}
+
+/* Slide-in from left for flow diagram steps */
+@keyframes slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.animate-slide-in {
+  opacity: 0;
+  animation: slide-in-right 0.4s ease-out forwards;
+}
+
+/* Scale-in for stat cards */
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.animate-scale-in {
+  opacity: 0;
+  animation: scale-in 0.4s ease-out forwards;
+}
+
+/* Glass-morphism */
+.glass {
+  background: rgba(17, 24, 39, 0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(75, 85, 99, 0.3);
 }
 
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: #1a1a2e;
+  background: #0a0a0a;
 }
 ::-webkit-scrollbar-thumb {
-  background: #16a34a;
+  background: #166534;
   border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #16a34a;
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #166534 #0a0a0a;
 }

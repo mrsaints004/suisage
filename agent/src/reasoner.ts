@@ -1,13 +1,12 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import Groq from 'groq-sdk';
 import { config } from './config.js';
 import type { TradeDecision, MarketSnapshot, VaultState, AgentMemory } from '@suisage/shared';
 import { MIST_PER_SUI } from '@suisage/shared';
 import { formatMemoryForPrompt } from './memory-manager.js';
 
-const genAI = new GoogleGenerativeAI(config.geminiApiKey);
-const model = genAI.getGenerativeModel({
-  model: 'gemini-2.0-flash',
-  systemInstruction: `You are SuiSage, an autonomous DeFi trading agent operating on the Sui blockchain.
+const groq = new Groq({ apiKey: config.groqApiKey });
+
+const SYSTEM_PROMPT = `You are SuiSage, an autonomous DeFi trading agent operating on the Sui blockchain.
 You analyze market data and make trading decisions for a shared vault that holds SUI.
 You trade SUI/wUSDC on DeepBook, Sui's native central limit orderbook.
 
@@ -50,8 +49,7 @@ TradeDecision JSON schema:
   "orderType": "MARKET" | "LIMIT",
   "riskAssessment": "honest assessment of what could go wrong",
   "marketCondition": "BULLISH" | "BEARISH" | "SIDEWAYS" | "VOLATILE" | "UNKNOWN"
-}`,
-});
+}`;
 
 export async function makeDecision(
   market: MarketSnapshot,
@@ -106,8 +104,17 @@ ${memwalContext ? `\n${memwalContext}\n` : ''}
 Based on all of the above — market data, vault state, your past performance from Walrus memory, MemWal persistent memory (if available), and on-chain constraints — make a trading decision. Respond with ONLY the JSON object.`;
 
   try {
-    const result = await model.generateContent(userMessage);
-    const text = result.response.text().trim();
+    const response = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      max_tokens: 1024,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: userMessage },
+      ],
+      temperature: 0.3,
+    });
+
+    const text = (response.choices[0]?.message?.content ?? '').trim();
 
     // Parse the JSON response, handling potential markdown code blocks
     let jsonText = text;

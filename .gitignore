@@ -37,3 +37,6 @@ package-lock.json
 
 # TypeScript cache
 *.tsbuildinfo
+
+# Walrus local fallback
+.walrus-fallback/

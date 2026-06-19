@@ -118,6 +118,41 @@ export function getSealPolicyId(): string {
 }
 
 /**
+ * Decrypt an encrypted reasoning blob.
+ * Only works if the caller satisfies the Seal policy (e.g., is a vault depositor).
+ *
+ * @param encryptedData - The encrypted bytes from Walrus
+ * @param txBytes - The transaction bytes for policy verification
+ * @returns Decrypted JSON string, or null if decryption fails
+ */
+export async function decryptReasoning(
+  encryptedData: Uint8Array,
+  txBytes: Uint8Array,
+  sessionKey: unknown, // SessionKey from @mysten/seal
+): Promise<string | null> {
+  if (!sealClient) {
+    console.warn('[Seal] Cannot decrypt — Seal not initialized');
+    return null;
+  }
+
+  try {
+    const decryptedBytes = await sealClient.decrypt({
+      data: encryptedData,
+      txBytes,
+      sessionKey: sessionKey as any,
+    });
+
+    const decoder = new TextDecoder();
+    const json = decoder.decode(decryptedBytes);
+    console.log(`[Seal] Decrypted reasoning (${encryptedData.length} bytes → ${decryptedBytes.length} bytes)`);
+    return json;
+  } catch (error) {
+    console.warn('[Seal] Decryption failed (caller may not satisfy policy):', error instanceof Error ? error.message : error);
+    return null;
+  }
+}
+
+/**
  * Build the Seal policy description for display purposes.
  */
 export function getSealStatus(): {

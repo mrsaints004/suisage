@@ -333,7 +333,7 @@ server.tool(
             ptbs: 'Withdraw + trade + record in a single atomic Programmable Transaction Block',
             clock: 'sui::clock::Clock used for on-chain cooldown enforcement',
             walrus: 'Reasoning stored immutably with SHA-256 hash on-chain for verification',
-            deepbook: 'Real limit orders on DeepBook V2 central limit orderbook',
+            deepbook: 'Real limit orders on DeepBook central limit orderbook',
           },
           track: 'Agentic Web — Sub-track 2: Autonomous Agent Wallet',
           moveTests: '19 unit tests (10 vault, 9 agent auth)',

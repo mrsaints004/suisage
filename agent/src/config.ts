@@ -33,7 +33,7 @@ export const config = {
   // Agent public address (for discovery; derived from private key if not set)
   agentAddress: optionalEnv('AGENT_ADDRESS', ''),
 
-  // DeepBook V2
+  // DeepBook
   deepbookPackageId: optionalEnv('DEEPBOOK_PACKAGE_ID', '0xdee9'),
   deepbookPoolId: optionalEnv('DEEPBOOK_POOL_ID', DEEPBOOK_SUI_USDC_POOL),
   accountCapId: optionalEnv('ACCOUNT_CAP_ID', ''),
@@ -42,11 +42,27 @@ export const config = {
   walrusAggregatorUrl: optionalEnv('WALRUS_AGGREGATOR_URL', 'https://aggregator.walrus.space'),
   walrusPublisherUrl: optionalEnv('WALRUS_PUBLISHER_URL', 'https://publisher.walrus.space'),
 
-  // Gemini
-  geminiApiKey: requireEnv('GEMINI_API_KEY'),
+  // Groq
+  groqApiKey: requireEnv('GROQ_API_KEY'),
 
   // Telegram
   telegramBotToken: optionalEnv('TELEGRAM_BOT_TOKEN', ''),
+
+  // MemWal (persistent semantic memory on Walrus)
+  memwalDelegateKey: optionalEnv('MEMWAL_DELEGATE_KEY', ''),
+  memwalAccountId: optionalEnv('MEMWAL_ACCOUNT_ID', ''),
+  memwalServerUrl: optionalEnv('MEMWAL_SERVER_URL', 'https://relayer.memory.walrus.xyz'),
+
+  // Seal (threshold encryption for reasoning)
+  sealPackageId: optionalEnv('SEAL_PACKAGE_ID', ''),
+  sealPolicyId: optionalEnv('SEAL_POLICY_ID', ''),
+  sealKeyServerObjectId: optionalEnv('SEAL_KEY_SERVER_OBJECT_ID', ''),
+
+  // DeepBook Predict (testnet prediction markets)
+  predictEnabled: optionalEnv('PREDICT_ENABLED', 'false') === 'true',
+
+  // Agent identity
+  agentId: optionalEnv('AGENT_ID', 'primary'),
 
   // Agent settings
   loopIntervalMs: parseInt(optionalEnv('AGENT_LOOP_INTERVAL_MS', '60000'), 10),

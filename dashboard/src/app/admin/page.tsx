@@ -64,6 +64,8 @@ export default function AdminPage() {
   const [createMaxTradeSize, setCreateMaxTradeSize] = useState('10');
   const [createMaxDeploymentBps, setCreateMaxDeploymentBps] = useState('5000');
   const [creatingVault, setCreatingVault] = useState(false);
+  const [showCreateConfirm, setShowCreateConfirm] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Find AgentCap for the selected vault (query by vault's agent caps)
   const [agentCapId, setAgentCapId] = useState<string | null>(null);
@@ -509,81 +511,123 @@ export default function AdminPage() {
       {/* Create Vault Section */}
       <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
         <h3 className="text-lg font-semibold mb-1">Create New Vault</h3>
-        <p className="text-sm text-gray-400 mb-6">
-          Set up your AI-managed trading vault. The agent will trade on your behalf within the safety limits you define below.
-          All limits are enforced by smart contracts — the agent physically cannot exceed them.
+        <p className="text-sm text-gray-400 mb-4">
+          Set up your AI-managed trading vault. All safety limits are enforced by smart contracts — the agent physically cannot exceed them.
         </p>
 
-        {/* Risk Limits */}
-        <div className="mb-6">
-          <h4 className="text-sm font-medium text-gray-300 mb-3">Safety Limits</h4>
-          <div className="grid sm:grid-cols-2 gap-4">
-            <FormField
-              label="Max Trade Size"
-              hint="The most SUI the agent can trade in a single order. Start small."
-              suffix="SUI"
-              value={createMaxTradeSize}
-              onChange={setCreateMaxTradeSize}
-              min={1} max={1000} step={1}
-              placeholder="10"
-            />
-            <FormField
-              label="Max Position Size"
-              hint="Largest portion of your vault the agent can put into one trade."
-              suffix="%"
-              value={String(parseInt(createMaxPositionBps) / 100 || 30)}
-              onChange={(v) => setCreateMaxPositionBps(String(Math.round(parseFloat(v) * 100)))}
-              min={1} max={100} step={1}
-              placeholder="30"
-            />
-            <FormField
-              label="Stop-Loss Trigger"
-              hint="If a position drops by this much, the agent will cut losses."
-              suffix="%"
-              value={String(parseInt(createStopLossBps) / 100 || 5)}
-              onChange={(v) => setCreateStopLossBps(String(Math.round(parseFloat(v) * 100)))}
-              min={1} max={50} step={1}
-              placeholder="5"
-            />
-            <FormField
-              label="Max Vault Deployed"
-              hint="Maximum portion of your vault the agent can have actively trading at once."
-              suffix="%"
-              value={String(parseInt(createMaxDeploymentBps) / 100 || 50)}
-              onChange={(v) => setCreateMaxDeploymentBps(String(Math.round(parseFloat(v) * 100)))}
-              min={1} max={100} step={1}
-              placeholder="50"
-            />
+        {/* Defaults summary */}
+        <div className="bg-gray-800/50 rounded-lg p-4 mb-4 border border-gray-700/50">
+          <p className="text-xs text-gray-400 mb-2 font-medium">Default safety limits (recommended for getting started)</p>
+          <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 text-center">
+            <div>
+              <p className="text-sm font-bold text-white">10 SUI</p>
+              <p className="text-[10px] text-gray-500">Max trade</p>
+            </div>
+            <div>
+              <p className="text-sm font-bold text-white">30%</p>
+              <p className="text-[10px] text-gray-500">Position</p>
+            </div>
+            <div>
+              <p className="text-sm font-bold text-white">5%</p>
+              <p className="text-[10px] text-gray-500">Stop-loss</p>
+            </div>
+            <div>
+              <p className="text-sm font-bold text-white">50%</p>
+              <p className="text-[10px] text-gray-500">Deployed</p>
+            </div>
+            <div>
+              <p className="text-sm font-bold text-white">30s</p>
+              <p className="text-[10px] text-gray-500">Cooldown</p>
+            </div>
+            <div>
+              <p className="text-sm font-bold text-white">3</p>
+              <p className="text-[10px] text-gray-500">Max trades</p>
+            </div>
           </div>
         </div>
 
-        {/* Trading Behavior */}
-        <div className="mb-6">
-          <h4 className="text-sm font-medium text-gray-300 mb-3">Trading Behavior</h4>
-          <div className="grid sm:grid-cols-2 gap-4">
-            <FormField
-              label="Cooldown Between Trades"
-              hint="Minimum wait time between trades. Prevents the agent from overtrading."
-              suffix="seconds"
-              value={createMinTradeInterval}
-              onChange={setCreateMinTradeInterval}
-              min={10} step={10}
-              placeholder="30"
-            />
-            <FormField
-              label="Max Simultaneous Trades"
-              hint="How many open positions the agent can hold at the same time."
-              suffix="trades"
-              value={createMaxOpenPositions}
-              onChange={setCreateMaxOpenPositions}
-              min={1} max={10} step={1}
-              placeholder="3"
-            />
-          </div>
-        </div>
+        {/* Toggle for advanced settings */}
+        <button
+          onClick={() => setShowAdvanced(!showAdvanced)}
+          className="text-xs text-sage-400 hover:text-sage-300 transition-colors mb-4 flex items-center gap-1"
+        >
+          <span className={`transition-transform inline-block ${showAdvanced ? 'rotate-90' : ''}`}>&#x25B6;</span>
+          {showAdvanced ? 'Hide advanced settings' : 'Customize safety limits'}
+        </button>
+
+        {/* Advanced Settings (collapsible) */}
+        {showAdvanced && (
+          <>
+            <div className="mb-6">
+              <h4 className="text-sm font-medium text-gray-300 mb-3">Safety Limits</h4>
+              <div className="grid sm:grid-cols-2 gap-4">
+                <FormField
+                  label="Max Trade Size"
+                  hint="The most SUI the agent can trade in a single order."
+                  suffix="SUI"
+                  value={createMaxTradeSize}
+                  onChange={setCreateMaxTradeSize}
+                  min={1} max={1000} step={1}
+                  placeholder="10"
+                />
+                <FormField
+                  label="Max Position Size"
+                  hint="Largest portion of your vault the agent can put into one trade."
+                  suffix="%"
+                  value={String(parseInt(createMaxPositionBps) / 100 || 30)}
+                  onChange={(v) => setCreateMaxPositionBps(String(Math.round(parseFloat(v) * 100)))}
+                  min={1} max={100} step={1}
+                  placeholder="30"
+                />
+                <FormField
+                  label="Stop-Loss Trigger"
+                  hint="If a position drops by this much, the agent will cut losses."
+                  suffix="%"
+                  value={String(parseInt(createStopLossBps) / 100 || 5)}
+                  onChange={(v) => setCreateStopLossBps(String(Math.round(parseFloat(v) * 100)))}
+                  min={1} max={50} step={1}
+                  placeholder="5"
+                />
+                <FormField
+                  label="Max Vault Deployed"
+                  hint="Maximum portion of your vault the agent can have actively trading at once."
+                  suffix="%"
+                  value={String(parseInt(createMaxDeploymentBps) / 100 || 50)}
+                  onChange={(v) => setCreateMaxDeploymentBps(String(Math.round(parseFloat(v) * 100)))}
+                  min={1} max={100} step={1}
+                  placeholder="50"
+                />
+              </div>
+            </div>
+
+            <div className="mb-6">
+              <h4 className="text-sm font-medium text-gray-300 mb-3">Trading Behavior</h4>
+              <div className="grid sm:grid-cols-2 gap-4">
+                <FormField
+                  label="Cooldown Between Trades"
+                  hint="Minimum wait time between trades. Prevents overtrading."
+                  suffix="seconds"
+                  value={createMinTradeInterval}
+                  onChange={setCreateMinTradeInterval}
+                  min={10} step={10}
+                  placeholder="30"
+                />
+                <FormField
+                  label="Max Simultaneous Trades"
+                  hint="How many open positions the agent can hold at the same time."
+                  suffix="trades"
+                  value={createMaxOpenPositions}
+                  onChange={setCreateMaxOpenPositions}
+                  min={1} max={10} step={1}
+                  placeholder="3"
+                />
+              </div>
+            </div>
+          </>
+        )}
 
         <button
-          onClick={handleCreateVault}
+          onClick={() => setShowCreateConfirm(true)}
           disabled={creatingVault || isPending || !VAULT_PACKAGE_ID}
           className="px-6 py-3 bg-sage-600 hover:bg-sage-700 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg font-medium transition-colors text-sm"
         >
@@ -599,6 +643,36 @@ export default function AdminPage() {
           <p className="text-xs text-yellow-500 mt-3">
             Set NEXT_PUBLIC_AGENT_ADDRESS to auto-authorize the agent during vault creation.
           </p>
+        )}
+
+        {/* Confirmation Modal */}
+        {showCreateConfirm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+            <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 max-w-md w-full mx-4 shadow-2xl">
+              <h3 className="text-lg font-semibold mb-2">Confirm Vault Creation</h3>
+              <p className="text-sm text-gray-400 mb-4">
+                This will require <span className="text-white font-medium">2 wallet signatures</span>:
+              </p>
+              <ol className="text-sm text-gray-400 space-y-2 mb-6 list-decimal list-inside">
+                <li>Create the vault on-chain</li>
+                <li>Create admin cap, strategy config, and authorize the agent</li>
+              </ol>
+              <div className="flex gap-3 justify-end">
+                <button
+                  onClick={() => setShowCreateConfirm(false)}
+                  className="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm font-medium transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => { setShowCreateConfirm(false); handleCreateVault(); }}
+                  className="px-4 py-2 bg-sage-600 hover:bg-sage-700 rounded-lg text-sm font-medium transition-colors"
+                >
+                  Confirm
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </div>
 

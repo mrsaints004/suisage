@@ -1,335 +1,329 @@
-# SuiSage
+# SuiSage — Safe Autonomous Agent Wallet Framework
 
-**Autonomous DeFi Agent with Move-Enforced Guardrails & Verifiable Reasoning on Sui**
+**A framework for building autonomous agent wallets with Move-enforced guardrails and verifiable reasoning on Sui.**
 
-SuiSage is an AI-powered trading agent that autonomously trades SUI/USDC on [DeepBook](https://deepbook.tech), manages a shared vault on Sui, and stores every decision — with full reasoning — on [Walrus](https://walrus.xyz) for public audit. Guardian checks are enforced **in Move smart contracts**, not just TypeScript. A SHA-256 hash of every reasoning chain is committed on-chain so anyone can verify it matches the Walrus blob.
+> *Safety limits enforced by smart contracts, not just code. Every decision stored immutably on Walrus with a SHA-256 hash committed on-chain for public verification.*
 
-> **Sui Overflow 2026 — Agentic Web Track (Sub-track 2: Autonomous Agent Wallet)**
+SuiSage demonstrates a reusable pattern for **safe autonomous agent wallets** on Sui. The reference implementation manages a shared vault, trades SUI/USDC on [DeepBook](https://deepbook.tech), and stores every decision — with full reasoning — on [Walrus](https://walrus.xyz) for public audit. Guardian checks are enforced **in Move smart contracts**, not just TypeScript. Even if someone forks the agent code and removes all safety checks, the Move contracts still block unauthorized actions.
+
+## The Core Trust Problem
+
+AI agents are stuck at the "approve wall" — every action needs a human signature. When agents do get autonomous access, the safety rails are in application code that can be bypassed by anyone who forks the repo. There's no way to:
+
+- **Cryptographically verify** what an AI agent was thinking when it traded your money
+- **Enforce budget limits** that the agent physically cannot exceed, even if compromised
+- **Revoke access** instantly without the agent's cooperation
+- **Share learning** across agent instances through persistent, verifiable memory
+
+## The Solution
+
+SuiSage uses Sui-native primitives to solve each of these:
+
+| Problem | Sui Primitive | SuiSage Implementation |
+|---------|--------------|----------------------|
+| Verify agent reasoning | Walrus + SHA-256 | Reasoning stored on Walrus, hash committed on-chain |
+| Enforce budget limits | Move `assert!` + Capability pattern | `withdraw_for_trading()` enforces 7 on-chain checks |
+| Instant revocation | Object ownership (AdminCap/AgentCap) | `revoke_agent()` destroys AgentCap — access gone |
+| Persistent memory | Walrus + MemWal | Semantic recall across sessions and agent instances |
+| Atomic execution | Programmable Transaction Blocks | Withdraw → Trade → Record in single atomic PTB |
+| Cooldown enforcement | `sui::clock::Clock` | On-chain time-based enforcement, not agent-controlled |
+| Privacy for reasoning | Seal threshold encryption | Optional encrypted reasoning with policy-based access |
+
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    SuiSage Architecture                      │
-│                                                              │
-│  ┌──────────┐    ┌──────────────────────────────────────┐   │
-│  │ Telegram │◄──►│          AI Agent (Claude)            │   │
-│  │   Bot    │    │                                      │   │
-│  └──────────┘    │  ┌────────┐  ┌────────┐  ┌────────┐ │   │
-│                  │  │ Market │  │Reasoner│  │Executor│ │   │
-│  ┌──────────┐    │  │ Reader │  │(Claude)│  │(Trade) │ │   │
-│  │   MCP    │◄──►│  └───┬────┘  └───┬────┘  └───┬────┘ │   │
-│  │  Server  │    │      │           │           │      │   │
-│  └──────────┘    └──────┼───────────┼───────────┼──────┘   │
-│                         │           │           │           │
-│  ┌──────────┐     ┌─────▼─────┐ ┌───▼───┐ ┌────▼──────┐   │
-│  │Dashboard │     │ DeepBook  │ │Walrus │ │   Vault   │   │
-│  │ (Next.js)│────►│ Orderbook │ │(Blobs)│ │(Move/Sui) │   │
-│  └──────────┘     └───────────┘ └───────┘ └───────────┘   │
-│                                                              │
-│  Move Contracts enforce: budget ceiling, cooldown,           │
-│  position concentration, deployment limits, performance fees │
-│                                                              │
-│                    Sui Blockchain                             │
-└─────────────────────────────────────────────────────────────┘
+                          SuiSage Architecture
+
+  Telegram Bot ◄──► ┌──────────────────────────────────┐
+                    │         AI Agent (Groq/Claude)     │
+  MCP Server  ◄──► │                                    │
+  (Claude Desktop)  │  Market   AI        Guardian       │
+                    │  Reader  Reasoner  (8+7 checks)   │
+                    │    │        │          │           │
+                    └────┼────────┼──────────┼───────────┘
+                         │        │          │
+        ┌────────────────┼────────┼──────────┼──────────────┐
+        │                ▼        ▼          ▼              │
+        │  ┌──────────┐ ┌──────┐ ┌─────────────┐           │
+        │  │ DeepBook │ │Walrus│ │  Vault+Auth  │           │
+        │  │Orderbook │ │Blobs │ │  (Move)      │           │
+        │  │+ Predict │ │+Hash │ │ 7 on-chain   │           │
+        │  └──────────┘ └──────┘ │ assert! chks │           │
+        │                        └─────────────┘           │
+        │  ┌──────┐  ┌────┐  ┌──────────────────┐          │
+        │  │MemWal│  │Seal│  │ Dashboard        │          │
+        │  │Memory│  │Enc.│  │ (Next.js)        │          │
+        │  └──────┘  └────┘  └──────────────────┘          │
+        │                                                   │
+        │               Sui Blockchain                      │
+        └───────────────────────────────────────────────────┘
 ```
 
-## Hackathon Track: Agentic Web (Sub-track 2)
+## Must-Have Requirements (All Met)
 
-All **must-have** requirements for the Autonomous Agent Wallet sub-track are met:
-
-| Requirement | How SuiSage Meets It |
-|-------------|---------------------|
-| **Real DeepBook Orders** | Limit orders on DeepBook V2 SUI/wUSDC pool via Programmable Transaction Blocks |
+| Requirement | Implementation |
+|-------------|---------------|
+| **Real DeepBook Orders** | Limit orders on DeepBook SUI/wUSDC pool via Programmable Transaction Blocks |
 | **Self-Enforced Budget Ceiling** | `AgentCap.max_trade_size` checked in Move `withdraw_for_trading()` — the agent literally cannot withdraw more |
 | **On-Chain Activity Log** | `TradeRecordEvent` emitted with Walrus blob ID + SHA-256 reasoning hash + guardian approval status |
 | **Owner Revocation Demo** | `AdminCap.revoke_agent()` destroys the `AgentCap` object, instantly cutting agent access |
 
-## What Makes This Different
+## Key Differentiators
 
-This is not a generic LLM wrapper. Sui-specific primitives enforce safety at the contract level:
+### 1. Dual-Layer Guardian (TypeScript + Move)
 
-### Move-Enforced Guardian (On-Chain)
-The `withdraw_for_trading()` function in `agent_auth.move` checks **7 conditions in Move** before releasing any funds:
+**TypeScript Layer (8 pre-flight checks):**
+Budget ceiling, spread, position concentration, liquidity depth, confidence floor, cooldown, slippage, vault health.
 
-1. **Agent active** — `AgentCap.active` must be true
-2. **Vault not paused** — cannot trade when paused
-3. **Strategy active** — `StrategyConfig.active` must be true
-4. **Trade size** — amount ≤ `AgentCap.max_trade_size`
-5. **Deployment limit** — total deployed ≤ `max_deployment_bps` of vault
-6. **Position concentration** — trade ≤ `max_position_bps` of vault value (from StrategyConfig)
-7. **Cooldown** — `Clock`-enforced minimum interval between trades
+**Move Layer (7 on-chain enforced checks):**
+Agent active, vault not paused, strategy active, trade size, deployment limit, position concentration, cooldown (Clock-enforced).
 
-These are Move `assert!` checks — the transaction aborts if any fail. No off-chain workaround is possible.
+The Move layer uses `assert!` — the transaction aborts if ANY check fails. Even if someone forks the agent code and removes all TypeScript checks, the Move contracts still block unauthorized trades.
 
-### Verifiable Reasoning (SHA-256 Hash)
+### 2. Verifiable Reasoning (SHA-256 Hash Commitment)
+
 1. Agent generates reasoning JSON (market analysis, decision, guardian results)
 2. JSON is stored on Walrus → returns blob ID
 3. Agent computes `SHA-256(reasoning_json)` → reasoning hash
 4. Both `blob_id` and `reasoning_hash` are committed on-chain in `TradeRecordEvent`
 5. Anyone can fetch the Walrus blob, hash it, and compare against the on-chain hash
 
-The dashboard does this verification automatically — showing "Verified" or "Mismatch" for each entry.
+The dashboard does this verification automatically — showing "Verified" or "Mismatch".
 
-### Performance Fee Accounting
-- ERC-4626 style share-based vault with **high-water mark NAV tracking**
-- 10% performance fee on profits only (configurable by admin)
-- `return_from_deployment()` calculates profit/loss, deducts fee from profit, updates high-water mark
-- `PerformanceEvent` emitted with profit amount, fee taken, new NAV per share
+### 3. Persistent Memory (Walrus + MemWal)
 
-### Dual-Layer Guardian
-Risk checks run in **both** TypeScript (pre-flight) and Move (on-chain):
-- TypeScript guardian runs 8 checks before building the transaction (spread, depth, slippage, budget, cooldown, concentration, confidence, vault health)
-- Move guardian runs 7 checks when the transaction executes (budget, deployment, concentration, cooldown, agent/strategy/vault active)
-- Even if the TypeScript guardian is bypassed (e.g., someone forks the agent), Move enforcement still blocks unauthorized trades
+- **Walrus blobs**: Every reasoning chain is stored immutably, referenced by on-chain blob IDs
+- **MemWal semantic memory**: Agent recalls past trades by similarity ("what happened when spread was wide?")
+- **Cross-agent intelligence**: Multiple SuiSage instances share patterns via `suisage-shared` namespace
+- **Learning loop**: Win rate, PnL patterns, and market condition performance fed back to AI reasoner
+
+### 4. DeepBook Predict Integration
+
+Optional integration with DeepBook's testnet prediction markets:
+- Reads oracle prices, implied volatility, and strike probabilities
+- Feeds prediction market sentiment into trading decisions
+- Ready for mainnet day-one deployment
+
+### 5. Seal Privacy Layer
+
+Optional threshold encryption for sensitive reasoning data:
+- Reasoning encrypted before Walrus storage
+- Access control via Move `seal_approve` policy
+- Vault depositors can decrypt; outsiders cannot
 
 ## How It Works
 
-Every 60 seconds, the agent runs a cycle:
+Every 60 seconds, the agent runs a 9-step cycle:
 
-1. **Read Market** — Fetches live SUI/wUSDC orderbook from DeepBook (price, spread, depth)
-2. **Read Vault** — Checks vault balance, deployed capital, NAV per share, performance data
-3. **Load Memory** — Retrieves past decisions from Walrus, computes win rate, extracts patterns
-4. **AI Reasoning** — Claude analyzes market + vault + memory and outputs a structured `TradeDecision`
-5. **Guardian Validation** — 8 TypeScript risk checks + on-chain `devInspectTransactionBlock` validation
-6. **Store on Walrus** — Full reasoning chain saved as immutable blob, SHA-256 hash computed
-7. **Atomic Execution** — In a single PTB: withdraw funds → place DeepBook order → record trade with reasoning hash
-8. **On-Chain Recording** — `TradeRecordEvent` with blob ID, reasoning hash, guardian status, confidence
+```
+1. Read Market      → DeepBook orderbook (bid/ask, spread, depth)
+2. Read Vault       → Balance, deployed, total value, NAV per share
+3. Check Position   → DeepBook available base/quote
+4. Load Memory      → Past decisions from Walrus + MemWal semantic recall
+   4b. Predict      → DeepBook Predict market sentiment (if configured)
+5. AI Decision      → Groq/Claude LLM analysis with full memory context
+6. Guardian Checks  → TypeScript pre-flight (8 checks) + on-chain validation
+7. Store on Walrus  → Reasoning JSON → blob ID, SHA-256 hash computed
+8. Execute Trade    → Atomic PTB: withdraw → trade → record (Move guardian enforced)
+9. Record & Share   → MemWal persistent memory + cross-agent intelligence sharing
+```
+
+## Smart Contracts (3 modules, 19 tests)
+
+### vault.move (406 LOC)
+- ERC-4626 style share-based vault with performance fee tracking
+- High-water mark NAV prevents fee gaming
+- Emergency withdraw bypasses pause (user protection)
+- 10 unit tests
+
+### agent_auth.move (354 LOC)
+- Capability-based access control (AdminCap + AgentCap)
+- 7 Move `assert!` checks in `withdraw_for_trading()`
+- `record_trade()` stores Walrus blob ID + reasoning hash on-chain
+- `revoke_agent()` destroys AgentCap (instant access revocation)
+- 9 unit tests
+
+### strategy.move (173 LOC)
+- Admin-controlled risk parameters
+- Pool whitelist, position limits, cooldown, stop-loss
 
 ## Project Structure
 
 ```
 suisage/
-├── contracts/                 # Move smart contracts (with tests)
+├── contracts/                 # Move smart contracts (3 modules, 19 tests)
 │   └── sources/
 │       ├── vault.move         # Share-based vault with performance fees
-│       ├── agent_auth.move    # Agent capability + on-chain guardian enforcement
+│       ├── agent_auth.move    # Agent capability + on-chain guardian
 │       ├── strategy.move      # Risk parameters (admin-controlled)
 │       ├── vault_tests.move   # 10 vault unit tests
 │       └── agent_auth_tests.move  # 9 agent auth unit tests
 │
-├── packages/shared/           # Shared TypeScript types & constants
-│
 ├── agent/                     # Node.js autonomous agent
 │   └── src/
-│       ├── index.ts           # Main agent loop
-│       ├── market-reader.ts   # DeepBook orderbook reads
-│       ├── reasoner.ts        # Claude API → TradeDecision
-│       ├── executor.ts        # DeepBook orders + atomic PTB + reasoning hash
-│       ├── guardian.ts        # Pre-trade risk validation (8 checks, dual-layer)
-│       ├── memory-manager.ts  # Walrus-backed learning/memory layer
-│       ├── walrus-logger.ts   # Store/retrieve reasoning on Walrus
-│       ├── vault-manager.ts   # Read vault + agent cap + strategy state
-│       ├── predict.ts         # DeepBook Predict integration (testnet)
+│       ├── index.ts           # Main 9-step agent loop (multi-vault)
+│       ├── reasoner.ts        # LLM decision engine (Groq/Claude)
+│       ├── executor.ts        # DeepBook PTB execution + reasoning hash
+│       ├── guardian.ts        # Dual-layer risk validation (8+7 checks)
+│       ├── market-reader.ts   # DeepBook orderbook + price feeds
+│       ├── memory-manager.ts  # Walrus-backed learning system
+│       ├── walrus-logger.ts   # Store/retrieve with retry + local fallback
+│       ├── memwal-client.ts   # Persistent semantic memory (3 namespaces)
+│       ├── seal-client.ts     # Threshold encryption for reasoning
+│       ├── predict.ts         # DeepBook Predict integration
 │       ├── telegram.ts        # AI-powered Telegram bot
-│       └── client.ts          # SuiClient + DeepBookClient setup
+│       ├── vault-manager.ts   # Read on-chain vault/agent/strategy state
+│       ├── vault-discovery.ts # Auto-discover managed vaults
+│       ├── client.ts          # SuiClient + DeepBook setup
+│       ├── config.ts          # Environment config loader
+│       └── __tests__/         # Integration tests (vitest)
 │
-├── dashboard/                 # Next.js frontend
+├── dashboard/                 # Next.js 14 frontend
 │   └── src/app/
-│       ├── page.tsx           # Landing page with live on-chain stats
-│       ├── portfolio/         # Deposit/withdraw + vault performance
-│       ├── reasoning/         # Reasoning timeline with hash verification
-│       └── admin/             # Vault management + strategy parameters
+│       ├── page.tsx           # Landing page with live stats + how-it-works
+│       ├── portfolio/         # Deposit/withdraw + performance chart
+│       ├── reasoning/         # Reasoning timeline + hash verification
+│       ├── guardian/          # Interactive guardian enforcement demo
+│       ├── admin/             # Vault management + strategy parameters
+│       ├── components/        # Navbar, PerformanceChart, Toast, etc.
+│       └── context/           # Multi-vault selection context
 │
+├── packages/shared/           # Shared TypeScript types & constants
 ├── mcp-server/                # MCP server for Claude Desktop
-└── scripts/
-    └── deploy.sh              # 5-step contract deployment script
+└── scripts/deploy.sh          # 5-step contract deployment
 ```
 
 ## Quick Start
 
 ### Prerequisites
-
-- Node.js 18+
-- [Sui CLI](https://docs.sui.io/build/install)
-- [Anthropic API key](https://console.anthropic.com/)
-- Funded Sui wallet (for gas + trading)
+- Node.js 18+, [Sui CLI](https://docs.sui.io/build/install)
+- [Groq API key](https://console.groq.com/) (free tier) or [Anthropic API key](https://console.anthropic.com/)
+- Funded Sui wallet
 
 ### 1. Clone & Install
-
 ```bash
-git clone https://github.com/AhmedKhan-GIT/SuiSage.git
-cd suisage
-npx pnpm install
+git clone https://github.com/mrsaints004/suisage.git
+cd suisage && npx pnpm install
 ```
 
 ### 2. Run Contract Tests
-
 ```bash
-cd contracts
-sui move test
+cd contracts && sui move test    # 19 Move tests
+cd ../agent && npx pnpm test     # TypeScript integration tests
 ```
-
-This runs 19 Move unit tests covering vault operations, guardian enforcement, and edge cases.
 
 ### 3. Deploy Contracts
-
 ```bash
-chmod +x scripts/deploy.sh
-./scripts/deploy.sh testnet
+chmod +x scripts/deploy.sh && ./scripts/deploy.sh testnet
 ```
 
-Deploys all contracts and creates: Vault, AdminCap, StrategyConfig, and AgentCap. Outputs the object IDs.
-
-### 4. Configure Environment
-
+### 4. Configure & Run
 ```bash
-cp .env.example .env
-```
+cp .env.example .env  # Fill in your keys and deployed object IDs
 
-Fill in your `.env`:
+# Dashboard env (required for frontend)
+cp dashboard/.env.local.example dashboard/.env.local
+# Edit dashboard/.env.local with your VAULT_PACKAGE_ID and other values
 
-```env
-AGENT_PRIVATE_KEY=suiprivkey1...
-VAULT_PACKAGE_ID=0x...
-VAULT_OBJECT_ID=0x...
-AGENT_CAP_ID=0x...
-STRATEGY_CONFIG_ID=0x...
-ANTHROPIC_API_KEY=sk-ant-...
-```
-
-### 5. Build & Run
-
-```bash
 npx pnpm build
-npx pnpm agent:dev      # Start the agent
-npx pnpm dashboard:dev  # Start the dashboard (separate terminal)
+npx pnpm --filter agent dev        # Start the agent
+npx pnpm --filter dashboard dev    # Start the dashboard (http://localhost:3000)
 ```
 
-## Smart Contracts
+## Deployment
 
-### vault.move
-- **Share-based accounting** — Users deposit SUI and receive proportional shares (ERC-4626 style)
-- **Performance fees** — 10% fee on profits above high-water mark NAV
-- **DepositReceipt NFT** — Proof of deposit, required for withdrawal
-- **Emergency withdraw** — Users can always exit, even when paused
-- **NAV tracking** — `vault_nav_per_share()`, `vault_total_profit()`, `vault_total_loss()`
+**Testnet Package ID:** `0x4f4419eaa848151f9adffa2386aa5ea40a6bfefe3ec930a5c2629dc826bdb53b`
 
-### agent_auth.move
-- **AdminCap / AgentCap** — Capability-based access control
-- **On-chain guardian** — `withdraw_for_trading()` enforces 7 Move checks (budget, cooldown, concentration, deployment, active status)
-- **Reasoning hash** — `record_trade()` stores SHA-256 hash + Walrus blob ID in `TradeRecordEvent`
-- **Agent stats** — Tracks total trades, total volume, last trade timestamp on-chain
-- **Performance fee admin** — `set_performance_fee()`, `withdraw_fees()`
+## Guardian Risk Checks
 
-### strategy.move
-- **Risk parameters** — Max position size, stop-loss, trade cooldown, max open positions
-- **Pool whitelist** — `is_pool_allowed()` for restricting trading pools
-- **Admin-controlled** — Only AdminCap holder can modify parameters
+### TypeScript Pre-Flight (Layer 1)
 
-## Move Tests (19 total)
+| Check | Threshold | What Happens |
+|-------|-----------|-------------|
+| Budget Ceiling | `AgentCap.max_trade_size` | Trade blocked before submission |
+| Spread | ≤ 50 bps | Prevents trading in illiquid conditions |
+| Position Concentration | ≤ 30% of vault | No single over-sized bet |
+| Liquidity Depth | ≥ 100 units | Ensures sufficient orderbook depth |
+| Confidence Floor | ≥ 30% | Rejects low-conviction trades |
+| Trade Cooldown | ≥ 30s | Prevents overtrading |
+| Slippage Estimate | < 100 bps | Protects against price impact |
+| Vault Health | Active, non-zero balance | Basic sanity |
 
-### Vault Tests (10)
-- `test_create_vault` — initial state and default 10% fee
-- `test_first_deposit_1_to_1_shares` — 1:1 share minting
-- `test_proportional_shares_on_second_deposit`
-- `test_full_withdraw`, `test_partial_withdraw`
-- `test_deposit_when_paused_fails`
-- `test_emergency_withdraw_when_paused`
-- `test_nav_per_share`
-- `test_vault_total_value_includes_deployed`
-- `test_withdraw_blocked_when_funds_deployed`
-- `test_profit_tracking_and_fees` — verifies 10 SUI profit → 1 SUI fee
+### Move On-Chain Enforcement (Layer 2)
 
-### Agent Auth Tests (9)
-- `test_authorize_and_check_agent_cap`
-- `test_withdraw_for_trading_within_limits`
-- `test_withdraw_exceeds_max_trade_size` (expected failure)
-- `test_withdraw_exceeds_position_concentration` (expected failure)
-- `test_cooldown_enforcement` (expected failure)
-- `test_record_trade_with_reasoning_hash`
-- `test_revoke_agent`
-- `test_trading_blocked_when_paused` (expected failure)
-- `test_trading_blocked_when_strategy_inactive` (expected failure)
+| Check | Move Error Code | Bypassed If Forked? |
+|-------|----------------|-------------------|
+| Agent active | `EAgentNotActive (107)` | **NO** |
+| Vault not paused | `EVaultPaused (109)` | **NO** |
+| Strategy active | `EStrategyNotActive (108)` | **NO** |
+| Trade size ≤ max | `EExceedsMaxTradeSize (101)` | **NO** |
+| Deployment limit | `EExceedsDeploymentLimit (103)` | **NO** |
+| Position concentration | `EPositionTooConcentrated (105)` | **NO** |
+| Cooldown (Clock) | `ECooldownNotMet (104)` | **NO** |
 
-## Guardian Risk Layer
+## Competitive Analysis
 
-### TypeScript Pre-Flight (8 checks)
+| Feature | SuiSage | Generic AI Trading Bots | Eliza/AutoGPT |
+|---------|---------|------------------------|---------------|
+| On-chain safety limits | Move `assert!` enforcement | App-level only | None |
+| Verifiable reasoning | SHA-256 hash on-chain + Walrus | None | None |
+| Persistent memory | Walrus + MemWal | In-memory only | Local files |
+| Cross-agent learning | MemWal shared namespace | None | None |
+| Instant revocation | Destroy AgentCap object | Kill process | Kill process |
+| Privacy layer | Seal threshold encryption | None | None |
+| Atomic execution | Sui PTB (withdraw+trade+record) | Multi-step | Multi-step |
 
-| Check | What It Does |
-|-------|-------------|
-| Budget Ceiling | Trade size within AgentCap's `max_trade_size` |
-| Spread | Rejects if spread exceeds 50 bps |
-| Position Concentration | No single trade > 30% of vault value |
-| Liquidity Depth | Minimum 100 units on relevant book side |
-| Confidence Floor | AI confidence must be ≥ 30% |
-| Trade Cooldown | Minimum 30s between trades |
-| Slippage Estimate | Expected slippage < 100 bps |
-| Vault Health | Vault active with non-zero balance |
+## Beyond Trading: The Framework
 
-### Move On-Chain Enforcement (7 checks)
+SuiSage's architecture is not specific to trading. The same pattern — **capability-gated agent + on-chain guardrails + verifiable reasoning** — applies to any autonomous agent that handles value:
 
-| Check | Move Error Code |
-|-------|----------------|
-| Agent active | `EAgentNotActive (107)` |
-| Vault not paused | `EVaultPaused (109)` |
-| Strategy active | `EStrategyNotActive (108)` |
-| Trade size ≤ max | `EExceedsMaxTradeSize (101)` |
-| Deployment limit | `EExceedsDeploymentLimit (103)` |
-| Position concentration | `EPositionTooConcentrated (105)` |
-| Cooldown (Clock) | `ECooldownNotMet (104)` |
+| Use Case | Agent Action | Move Guardrail |
+|----------|-------------|---------------|
+| **Payment Agent** | Send payments on behalf of a business | Budget ceiling, recipient whitelist, daily limit |
+| **DAO Treasury Bot** | Execute approved proposals | Proposal quorum check, spending cap, timelock |
+| **Gaming NPC** | Trade in-game assets, manage guild treasury | Asset type whitelist, value cap per trade |
+| **DeFi Yield Agent** | Rebalance across lending protocols | Max allocation per protocol, slippage limit |
+| **Subscription Manager** | Auto-renew services, manage recurring payments | Max amount per period, approved vendors |
 
-If the TypeScript guardian is bypassed (e.g., forked agent), Move enforcement still blocks the transaction.
+The `AgentCap` + `AdminCap` pattern, dual-layer guardian, and Walrus reasoning logs are reusable building blocks for any agent that needs **autonomous access with provable constraints**.
 
-## Walrus Memory System
+## Roadmap
 
-SuiSage reads back past decisions from Walrus to learn:
+**Q3 2026 — Mainnet Launch**
+- Mainnet deployment with audited contracts
+- Multi-strategy support (momentum, mean-reversion, range)
+- DeepBook Predict mainnet integration
 
-1. On-chain `TradeRecordEvent`s contain Walrus blob IDs
-2. Memory manager fetches those blobs from Walrus
-3. Computes: win rate, PnL per trade, average confidence, behavioral patterns
-4. Injects memory context into Claude's prompt for the next decision
+**Q4 2026 — Institutional Features**
+- Multi-depositor vaults with role-based access
+- Performance analytics dashboard with backtesting
+- Governance voting on strategy parameters
 
-### Reasoning Hash Verification
-- Every reasoning JSON is hashed with SHA-256 before the trade transaction
-- The hash is stored in `TradeRecordEvent.reasoning_hash` on-chain
-- The dashboard fetches the Walrus blob, re-computes the hash, and compares
-- Any tampering of the Walrus blob would produce a hash mismatch
-
-## MemWal Integration
-
-[MemWal](https://github.com/MystenLabs/memwal) provides persistent, encrypted, semantically-searchable agent memory on Walrus.
-
-**Three namespaces:**
-- `suisage-trades` — Individual trade decisions with outcomes
-- `suisage-patterns` — Discovered market patterns
-- `suisage-shared` — Cross-agent shared intelligence
-
-## Seal Privacy Layer
-
-Optional [Seal](https://github.com/MystenLabs/seal) threshold encryption for sensitive reasoning data. Access control defined by Move `seal_approve` function.
-
-## Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `AGENT_PRIVATE_KEY` | **Yes** | Agent wallet private key (`suiprivkey...` format) |
-| `VAULT_PACKAGE_ID` | **Yes** | Package ID from deployment |
-| `VAULT_OBJECT_ID` | **Yes** | Vault shared object ID |
-| `AGENT_CAP_ID` | **Yes** | AgentCap object ID |
-| `STRATEGY_CONFIG_ID` | **Yes** | StrategyConfig object ID |
-| `ANTHROPIC_API_KEY` | **Yes** | Claude API key |
-| `SUI_NETWORK` | No | `mainnet` or `testnet` (default: `mainnet`) |
-| `SUI_RPC_URL` | No | Custom RPC URL |
-| `DEEPBOOK_POOL_ID` | No | DeepBook pool (default: SUI/wUSDC) |
-| `ACCOUNT_CAP_ID` | No | DeepBook AccountCap (auto-created if empty) |
-| `TELEGRAM_BOT_TOKEN` | No | Telegram bot token |
-| `AGENT_LOOP_INTERVAL_MS` | No | Cycle interval in ms (default: `60000`) |
-| `MAX_TRADE_SIZE_SUI` | No | Max SUI per trade (default: `10`) |
-| `WALRUS_AGGREGATOR_URL` | No | Walrus aggregator endpoint |
-| `WALRUS_PUBLISHER_URL` | No | Walrus publisher endpoint |
+**Q1 2027 — Platform Expansion**
+- SuiSage-as-a-Service: anyone can deploy a managed vault
+- Cross-protocol strategies (lending + trading + prediction)
+- Mobile app with push notifications
 
 ## Tech Stack
 
-- **Blockchain**: Sui (Move smart contracts with 19 unit tests)
-- **DEX**: DeepBook V2 (`@mysten/deepbook` SDK)
-- **Storage**: Walrus (decentralized blob storage) + SHA-256 hash on-chain
-- **Memory**: MemWal (`@mysten-incubation/memwal`)
-- **Privacy**: Seal (`@mysten/seal`) — threshold encryption
-- **AI**: Claude (Anthropic API)
-- **Agent**: Node.js + TypeScript
-- **Frontend**: Next.js 14 + Tailwind CSS + `@mysten/dapp-kit`
-- **Telegram**: grammy framework
-- **MCP**: `@modelcontextprotocol/sdk`
+| Layer | Technology |
+|-------|-----------|
+| Blockchain | Sui (Move smart contracts, 19 unit tests) |
+| DEX | DeepBook (`@mysten/deepbook` SDK) |
+| Prediction Markets | DeepBook Predict (testnet) |
+| Storage | Walrus (decentralized blob storage) + SHA-256 hash on-chain |
+| Memory | MemWal (`@mysten-incubation/memwal`) — persistent semantic recall |
+| Privacy | Seal (`@mysten/seal`) — threshold encryption |
+| AI | Groq (llama-3.3-70b) / Claude (Anthropic API) |
+| Agent | Node.js + TypeScript + vitest |
+| Frontend | Next.js 14 + Tailwind CSS + Recharts + `@mysten/dapp-kit` |
+| Telegram | grammy framework + Groq-powered chat |
+| MCP | `@modelcontextprotocol/sdk` (Claude Desktop integration) |
 
 ## License
 
 MIT
+
+---
+
+<sub>Built for [Sui Overflow 2026](https://suioverflow.com) — Agentic Web Track (Sub-track 2: Autonomous Agent Wallet)</sub>

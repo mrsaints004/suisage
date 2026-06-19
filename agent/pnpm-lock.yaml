@@ -1,0 +1,26 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      '@suisage/shared':
+        specifier: workspace:*
+        version: link:../packages/shared
+      groq-sdk:
+        specifier: ^1.2.1
+        version: 1.2.1
+
+packages:
+
+  groq-sdk@1.2.1:
+    resolution: {integrity: sha512-dsDSWJRJf+n2dPiCv7zU3IsJbrh7jfSPqi6vc1q0TTK1oUF6bn+wv4P2VFdynkHpuJ0TTJ57vlpT87judPgVPA==}
+    hasBin: true
+
+snapshots:
+
+  groq-sdk@1.2.1: {}
