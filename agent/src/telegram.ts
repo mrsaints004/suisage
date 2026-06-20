@@ -1,7 +1,7 @@
 import { Bot, InlineKeyboard } from 'grammy';
 import Groq from 'groq-sdk';
 import { config } from './config.js';
-import { agentAddress } from './client.js';
+import { agentAddress, suiClient } from './client.js';
 import { readVaultState } from './vault-manager.js';
 import { readMarketState } from './market-reader.js';
 import { retrieveReasoning } from './walrus-logger.js';
@@ -10,6 +10,9 @@ import type { TradeDecision, MarketSnapshot, VaultState } from '@suisage/shared'
 
 let bot: Bot | null = null;
 const subscribedChats = new Set<number>();
+
+// Linked wallets per chat (chat ID -> Sui address)
+const linkedWallets = new Map<number, string>();
 
 // Conversation history per chat (keep last 10 messages for context)
 const chatHistories = new Map<number, Array<{ role: 'user' | 'assistant'; content: string }>>();
@@ -43,6 +46,8 @@ You have access to LIVE DATA that will be injected into your context. Use it to 
 When users ask vague things like "how's it going" or "what's up", give them a quick market + vault summary.
 
 IMPORTANT: You are the agent itself. Speak in first person ("I bought", "I'm holding", "my analysis shows"). You ARE the trading agent.
+
+If a user asks about their personal portfolio or position, tell them to use /link to connect their wallet address first, then /portfolio to see their shares and value.
 
 If a user asks something you can't answer with the provided data, say so honestly and suggest what they could check on the dashboard instead.`;
 
@@ -173,12 +178,13 @@ export async function startTelegramBot(): Promise<void> {
   // /start - Welcome with inline buttons
   bot.command('start', async (ctx) => {
     const keyboard = new InlineKeyboard()
-      .text('📊 Market Status', 'action:market')
+      .text('📁 My Portfolio', 'action:portfolio')
       .text('🏦 Vault Status', 'action:vault')
       .row()
-      .text('📜 Recent Trades', 'action:trades')
-      .text('🔔 Subscribe', 'action:subscribe')
+      .text('📊 Market', 'action:market')
+      .text('📜 Trades', 'action:trades')
       .row()
+      .text('🔔 Subscribe', 'action:subscribe')
       .text('❓ How does this work?', 'action:explain');
 
     await ctx.reply(
@@ -198,16 +204,21 @@ export async function startTelegramBot(): Promise<void> {
 
     await ctx.reply(
       `*SuiSage Commands*\n\n` +
+      `*Your Portfolio*\n` +
+      `/link \`0xAddr\` — Link your wallet\n` +
+      `/portfolio — Your shares, value & P&L\n` +
+      `/unlink — Remove linked wallet\n\n` +
+      `*Market & Vault*\n` +
       `/market — Live SUI/USDC orderbook data\n` +
       `/vault — Vault balance & status\n` +
-      `/trades — Recent trade decisions\n` +
+      `/trades — Recent trade decisions\n\n` +
+      `*Notifications*\n` +
       `/subscribe — Get notified on trades\n` +
       `/status — Agent health & info\n\n` +
       `Or just chat with me naturally! Ask things like:\n` +
+      `• "How's my portfolio doing?"\n` +
       `• "Why did you buy?"\n` +
-      `• "What's the spread looking like?"\n` +
-      `• "How's the vault doing?"\n` +
-      `• "Explain your strategy"`,
+      `• "What's the spread looking like?"`,
       { parse_mode: 'Markdown', reply_markup: keyboard },
     );
   });
@@ -269,7 +280,53 @@ export async function startTelegramBot(): Promise<void> {
     );
   });
 
+  // /link - Link a wallet address
+  bot.command('link', async (ctx) => {
+    const text = ctx.message?.text ?? '';
+    const parts = text.split(/\s+/);
+    const address = parts[1];
+
+    if (!address || !address.startsWith('0x') || address.length < 40) {
+      await ctx.reply(
+        `*Link Your Wallet*\n\n` +
+        `Send your Sui wallet address so I can show your personal portfolio.\n\n` +
+        `Usage: \`/link 0xYourAddress...\`\n\n` +
+        `_This is read-only — I never get access to your wallet. I just look up your DepositReceipts on-chain._`,
+        { parse_mode: 'Markdown' },
+      );
+      return;
+    }
+
+    linkedWallets.set(ctx.chat.id, address);
+
+    const keyboard = new InlineKeyboard()
+      .text('📁 View Portfolio', 'action:portfolio')
+      .text('🏦 Vault Status', 'action:vault');
+
+    await ctx.reply(
+      `Wallet linked: \`${address.slice(0, 10)}...${address.slice(-8)}\`\n\n` +
+      `Use /portfolio to see your shares and value.`,
+      { parse_mode: 'Markdown', reply_markup: keyboard },
+    );
+  });
+
+  // /unlink - Remove linked wallet
+  bot.command('unlink', async (ctx) => {
+    linkedWallets.delete(ctx.chat.id);
+    await ctx.reply('Wallet unlinked.');
+  });
+
+  // /portfolio - Show user's personal vault position
+  bot.command('portfolio', async (ctx) => {
+    await handlePortfolioRequest(ctx);
+  });
+
   // Handle inline button callbacks
+  bot.callbackQuery('action:portfolio', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await handlePortfolioRequest(ctx);
+  });
+
   bot.callbackQuery('action:market', async (ctx) => {
     await ctx.answerCallbackQuery();
     await handleMarketRequest(ctx);
@@ -345,12 +402,14 @@ export async function startTelegramBot(): Promise<void> {
     const keyboard = new InlineKeyboard();
     const lowerText = text.toLowerCase();
 
-    if (lowerText.includes('market') || lowerText.includes('price') || lowerText.includes('spread')) {
+    if (lowerText.includes('portfolio') || lowerText.includes('my share') || lowerText.includes('my position') || lowerText.includes('my deposit') || lowerText.includes('pnl') || lowerText.includes('profit')) {
+      keyboard.text('📁 Portfolio', 'action:portfolio').text('🏦 Vault', 'action:vault');
+    } else if (lowerText.includes('market') || lowerText.includes('price') || lowerText.includes('spread')) {
       keyboard.text('🔄 Refresh Market', 'action:market').text('📜 Trades', 'action:trades');
     } else if (lowerText.includes('trade') || lowerText.includes('buy') || lowerText.includes('sell') || lowerText.includes('hold')) {
       keyboard.text('📜 See All Trades', 'action:trades').text('📊 Market', 'action:market');
     } else if (lowerText.includes('vault') || lowerText.includes('balance') || lowerText.includes('deposit') || lowerText.includes('withdraw')) {
-      keyboard.text('🏦 Refresh Vault', 'action:vault').text('📊 Market', 'action:market');
+      keyboard.text('🏦 Refresh Vault', 'action:vault').text('📁 Portfolio', 'action:portfolio');
     } else if (lowerText.includes('subscribe') || lowerText.includes('notify') || lowerText.includes('alert')) {
       keyboard.text('🔔 Subscribe', 'action:subscribe').text('📊 Market', 'action:market');
     } else if (lowerText.includes('help') || lowerText.includes('command') || lowerText.includes('what can')) {
@@ -432,6 +491,112 @@ async function handleVaultRequest(ctx: any) {
     );
   } catch (error) {
     await ctx.reply("Couldn't read vault state. The contract might not be deployed yet.");
+  }
+}
+
+async function handlePortfolioRequest(ctx: any) {
+  const chatId = ctx.chat?.id;
+  const walletAddress = chatId ? linkedWallets.get(chatId) : undefined;
+
+  if (!walletAddress) {
+    await ctx.reply(
+      `*No wallet linked*\n\n` +
+      `Link your Sui address first:\n` +
+      `\`/link 0xYourAddress...\`\n\n` +
+      `_Read-only — I just look up your on-chain DepositReceipts._`,
+      { parse_mode: 'Markdown' },
+    );
+    return;
+  }
+
+  try {
+    // Fetch user's DepositReceipt objects
+    const objects = await suiClient.getOwnedObjects({
+      owner: walletAddress,
+      filter: { StructType: `${config.vaultPackageId}::vault::DepositReceipt` },
+      options: { showContent: true },
+    });
+
+    if (!objects.data || objects.data.length === 0) {
+      const keyboard = new InlineKeyboard()
+        .text('🏦 Vault Status', 'action:vault')
+        .text('📊 Market', 'action:market');
+
+      await ctx.reply(
+        `*Portfolio for* \`${walletAddress.slice(0, 10)}...${walletAddress.slice(-8)}\`\n\n` +
+        `No deposits found. Deposit SUI via the dashboard to get started.`,
+        { parse_mode: 'Markdown', reply_markup: keyboard },
+      );
+      return;
+    }
+
+    // Get vault state for NAV calculation
+    const vault = lastVault || (await readVaultState());
+    const totalShares = Number(vault.totalShares);
+    const totalValueMist = Number(vault.totalValue);
+
+    let userTotalShares = BigInt(0);
+    let userTotalDeposited = BigInt(0);
+    const receiptLines: string[] = [];
+
+    for (const obj of objects.data) {
+      if (!obj.data?.content || obj.data.content.dataType !== 'moveObject') continue;
+      const fields = obj.data.content.fields as Record<string, unknown>;
+      const shares = BigInt(String(fields.shares ?? '0'));
+      const deposited = BigInt(String(fields.deposited_amount ?? '0'));
+
+      userTotalShares += shares;
+      userTotalDeposited += deposited;
+
+      const sharesSui = (Number(shares) / 1e9).toFixed(4);
+      const depositedSui = (Number(deposited) / 1e9).toFixed(4);
+      receiptLines.push(`  ${sharesSui} shares (deposited ${depositedSui} SUI)`);
+    }
+
+    // Calculate current value
+    const currentValueMist = totalShares > 0
+      ? (Number(userTotalShares) * totalValueMist) / totalShares
+      : 0;
+    const currentValueSui = (currentValueMist / 1e9).toFixed(4);
+    const depositedSui = (Number(userTotalDeposited) / 1e9).toFixed(4);
+    const pnlMist = currentValueMist - Number(userTotalDeposited);
+    const pnlSui = (pnlMist / 1e9).toFixed(4);
+    const pnlPct = Number(userTotalDeposited) > 0
+      ? ((pnlMist / Number(userTotalDeposited)) * 100).toFixed(2)
+      : '0.00';
+    const pnlEmoji = pnlMist >= 0 ? '📈' : '📉';
+    const pnlSign = pnlMist >= 0 ? '+' : '';
+
+    // Share of vault
+    const vaultPct = totalShares > 0
+      ? ((Number(userTotalShares) / totalShares) * 100).toFixed(2)
+      : '0.00';
+
+    const keyboard = new InlineKeyboard()
+      .text('🔄 Refresh', 'action:portfolio')
+      .text('🏦 Vault', 'action:vault')
+      .row()
+      .text('📊 Market', 'action:market')
+      .text('📜 Trades', 'action:trades');
+
+    await ctx.reply(
+      `*Portfolio* — \`${walletAddress.slice(0, 10)}...${walletAddress.slice(-8)}\`\n\n` +
+      `💰 Current Value: \`${currentValueSui}\` SUI\n` +
+      `📥 Total Deposited: \`${depositedSui}\` SUI\n` +
+      `${pnlEmoji} P&L: \`${pnlSign}${pnlSui}\` SUI (${pnlSign}${pnlPct}%)\n\n` +
+      `📊 Your Share: \`${vaultPct}%\` of vault\n` +
+      `🧾 Receipts: ${objects.data.length}\n` +
+      (receiptLines.length > 0 ? receiptLines.join('\n') + '\n' : '') +
+      `\n_Updated ${getTimeAgo(Date.now() - 1000)}_`,
+      { parse_mode: 'Markdown', reply_markup: keyboard },
+    );
+  } catch (error) {
+    console.error('[Telegram] Portfolio lookup error:', error);
+    await ctx.reply(
+      `Couldn't fetch portfolio for \`${walletAddress.slice(0, 10)}...${walletAddress.slice(-8)}\`. ` +
+      `The address might not have any deposits, or the chain query failed. Try again?`,
+      { parse_mode: 'Markdown' },
+    );
   }
 }
 

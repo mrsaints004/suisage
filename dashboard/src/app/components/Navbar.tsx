@@ -8,6 +8,7 @@ import { useState } from 'react';
 
 const navItems = [
   { href: '/', label: 'Home' },
+  { href: '/how-it-works', label: 'How It Works' },
   { href: '/portfolio', label: 'Portfolio' },
   { href: '/reasoning', label: 'Reasoning' },
   { href: '/guardian', label: 'Guardian' },
@@ -30,7 +31,6 @@ export function Navbar() {
                 S
               </div>
               <span className="text-xl font-bold text-sage-400 tracking-tight">SuiSage</span>
-              <span className="text-xs bg-sage-900/50 text-sage-400 px-1.5 py-0.5 rounded border border-sage-800/50">AI</span>
               <span className={`text-xs px-1.5 py-0.5 rounded font-mono ${network === 'testnet' ? 'bg-yellow-900/50 text-yellow-400 border border-yellow-800/50' : 'bg-green-900/50 text-green-400 border border-green-800/50'}`}>{network}</span>
             </Link>
 

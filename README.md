@@ -230,6 +230,90 @@ npx pnpm --filter agent dev        # Start the agent
 npx pnpm --filter dashboard dev    # Start the dashboard (http://localhost:3000)
 ```
 
+## Telegram Bot
+
+SuiSage includes an AI-powered Telegram bot that lets users monitor the vault, check their portfolio, and receive trade notifications — all without opening the dashboard.
+
+### Setup
+
+1. Create a bot via [@BotFather](https://t.me/botfather) on Telegram
+2. Add the token to your `.env`:
+   ```bash
+   TELEGRAM_BOT_TOKEN=your_bot_token_here
+   ```
+3. Restart the agent — the bot starts automatically alongside the trading loop
+
+### User Commands
+
+| Command | What It Does |
+|---------|-------------|
+| `/link 0xAddr` | Link your Sui wallet address (read-only lookup) |
+| `/portfolio` | Your shares, current value, P&L, and vault share % |
+| `/market` | Live SUI/USDC price, spread, and depth from DeepBook |
+| `/vault` | Vault balance, deployed amount, and status |
+| `/trades` | Recent trade decisions with confidence and reasoning |
+| `/subscribe` | Get push notifications when the agent trades |
+| `/unsubscribe` | Stop trade notifications |
+| `/status` | Agent uptime, cycle interval, subscriber count |
+| `/unlink` | Remove linked wallet |
+
+Users can also ask natural language questions — the bot uses Groq to answer with live vault and market data injected into context.
+
+### How Wallet Linking Works
+
+The bot is **read-only**. When a user sends `/link 0xAddr`, the bot stores the mapping (chat ID → address) in memory and uses it to query that wallet's `DepositReceipt` objects on-chain. No private keys, no signing, no custody — just public chain reads.
+
+## MCP Server (Claude Desktop)
+
+SuiSage provides an MCP server so Claude Desktop (or any MCP-compatible AI) can query vault state, market data, and reasoning logs.
+
+### Setup
+
+1. Build the MCP server:
+   ```bash
+   npx pnpm --filter mcp-server build
+   ```
+2. Add to your Claude Desktop config (`~/.config/Claude/claude_desktop_config.json` on Mac/Linux):
+   ```json
+   {
+     "mcpServers": {
+       "suisage": {
+         "command": "node",
+         "args": ["/absolute/path/to/suisage/mcp-server/dist/index.js"]
+       }
+     }
+   }
+   ```
+3. Restart Claude Desktop — SuiSage tools will appear automatically
+
+### Available Tools
+
+| Tool | Description |
+|------|------------|
+| `get_vault_state` | Vault balance, shares, NAV, deployed amount, fees |
+| `get_market_state` | DeepBook orderbook (bid/ask/spread) |
+| `get_reasoning` | Fetch full reasoning from Walrus by blob ID |
+| `get_recent_trades` | Last N trades with decision data |
+| `get_deposit_events` | Vault deposit/withdraw history |
+| `get_agent_architecture` | System overview and how SuiSage works |
+| `get_guardian_config` | Risk check thresholds (TypeScript + Move) |
+
+All tools are read-only. The MCP server runs locally via stdio — not a hosted API.
+
+### Example
+
+In Claude Desktop: *"What's the vault's current NAV per share?"* → Claude calls `get_vault_state` via MCP → returns live on-chain data.
+
+## Access Everywhere
+
+| Interface | Best For | Capabilities |
+|-----------|----------|-------------|
+| **Dashboard** (Next.js) | Full management | Deposit/withdraw, reasoning verification, guardian demo, admin controls |
+| **Telegram Bot** | Mobile monitoring | Portfolio, market data, trade notifications, natural language chat |
+| **MCP Server** | AI-to-AI queries | Claude Desktop queries vault/market/reasoning data programmatically |
+
+All three interfaces read from the same on-chain state. The agent is the only process that writes.
+
 ## Deployment
 
 **Testnet Package ID:** `0x4f4419eaa848151f9adffa2386aa5ea40a6bfefe3ec930a5c2629dc826bdb53b`

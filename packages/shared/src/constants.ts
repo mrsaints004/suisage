@@ -36,7 +36,7 @@ export const GUARDIAN_DEFAULTS = {
   minBidDepth: 100,          // min depth to trade
   minAskDepth: 100,
   maxSlippageBps: 100,       // max 1% slippage
-  minConfidence: 30,         // reject if AI confidence < 30%
+  minConfidence: 30,         // reject if confidence < 30%
   cooldownMs: 30_000,        // min 30s between trades
 } as const;
 

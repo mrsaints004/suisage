@@ -106,10 +106,10 @@ export default function HomePage() {
         </h1>
         <p className="text-base text-gray-400 mb-6 animate-fade-in-up-d3">Safe Autonomous Agent Wallet</p>
         <p className="text-lg sm:text-xl text-gray-300 max-w-2xl mx-auto mb-4 font-medium animate-fade-in-up-d4">
-          The AI Agent That Can Trade But Can&apos;t Cheat
+          The Agent That Can Trade But Can&apos;t Cheat
         </p>
         <p className="text-gray-500 max-w-xl mx-auto mb-8 text-sm sm:text-base leading-relaxed animate-fade-in-up-d5">
-          An AI agent that trades on DeepBook with budget ceilings enforced by Move smart contracts,
+          An autonomous agent that trades on DeepBook with budget ceilings enforced by Move smart contracts,
           cooldown and position limits checked on-chain, and every decision stored immutably on Walrus
           with a SHA-256 hash committed to the blockchain for verification.
         </p>
@@ -149,7 +149,7 @@ export default function HomePage() {
       <section>
         <h2 className="text-2xl font-bold text-center mb-3">How It Works</h2>
         <p className="text-gray-500 text-center mb-10 max-w-lg mx-auto text-sm">
-          Three simple steps. Your funds are managed by AI with on-chain safety rails.
+          Three simple steps. Your funds are managed autonomously with on-chain safety rails.
         </p>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <Card
@@ -161,7 +161,7 @@ export default function HomePage() {
           <Card
             step="2"
             title="Agent Trades with On-Chain Guards"
-            description="Every 60 seconds, the AI analyzes the DeepBook orderbook and decides to trade. Move contracts enforce budget ceilings, cooldown periods, and position limits — the AI literally cannot exceed them."
+            description="Every 60 seconds, the agent analyzes the DeepBook orderbook and decides to trade. Move contracts enforce budget ceilings, cooldown periods, and position limits that cannot be exceeded."
             learnMore="Guardian checks: trade size, concentration, cooldown, deployment limit — all enforced in Move, not just TypeScript."
           />
           <Card
@@ -186,11 +186,11 @@ export default function HomePage() {
       <section>
         <h2 className="text-2xl font-bold text-center mb-3">Why Sui Makes This Possible</h2>
         <p className="text-gray-500 text-center mb-10 max-w-lg mx-auto text-sm">
-          Not a generic LLM wrapper — Sui primitives make the AI safer and more composable.
+          Sui primitives make the agent safer and more composable than off-chain alternatives.
         </p>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {[
-            { title: 'Move AgentCap', description: 'Budget ceiling enforced at the type level. The AI cannot exceed its max_trade_size — it\'s a Move assertion, not a suggestion.' },
+            { title: 'Move AgentCap', description: 'Budget ceiling enforced at the type level. The agent cannot exceed its max_trade_size — it\'s a Move assertion, not a suggestion.' },
             { title: 'On-Chain Cooldown', description: 'Trade interval enforced using sui::clock::Clock. The contract checks elapsed time since last trade — no off-chain trust needed.' },
             { title: 'Atomic PTBs', description: 'Withdraw + trade + record in a single Programmable Transaction Block. All succeed or all fail — no partial states.' },
             { title: 'Walrus + Hash', description: 'Full reasoning stored on Walrus. SHA-256 hash committed on-chain. Anyone can verify the blob matches what the agent committed to.' },
@@ -230,7 +230,7 @@ export default function HomePage() {
             href="/reasoning"
             className="px-6 py-3 bg-sage-600 hover:bg-sage-700 rounded-lg font-medium transition-colors text-center"
           >
-            View AI Reasoning
+            View Reasoning
           </Link>
           <Link
             href="/portfolio"
@@ -282,7 +282,7 @@ export default function HomePage() {
       <section className="border-t border-gray-800 pt-8 pb-4">
         <p className="text-center text-xs text-gray-600 mb-4 uppercase tracking-widest">Powered by</p>
         <div className="flex flex-wrap justify-center gap-3">
-          {['Sui', 'DeepBook', 'Walrus', 'MemWal', 'Seal', 'Groq'].map((name) => (
+          {['Sui', 'DeepBook', 'Walrus', 'MemWal', 'Seal'].map((name) => (
             <span
               key={name}
               className="px-3 py-1.5 rounded-full text-xs font-medium bg-gray-800/80 text-gray-400 border border-gray-700/50 hover:border-sage-700/50 hover:text-sage-400 transition-colors"
@@ -300,7 +300,7 @@ export default function HomePage() {
 
 const flowSteps = [
   { label: 'Market Data', sub: 'DeepBook orderbook' },
-  { label: 'AI Reasoner', sub: 'Groq LLM analysis' },
+  { label: 'Reasoner', sub: 'Market analysis' },
   { label: 'Guardian Checks', sub: 'Move-enforced limits' },
   { label: 'DeepBook Trade', sub: 'Atomic PTB execution' },
   { label: 'Walrus Storage', sub: 'Immutable reasoning log' },
@@ -376,7 +376,6 @@ function PrimitiveBadge({
 }: {
   title: string;
   description: string;
-  color?: string;
 }) {
   return (
     <div className="rounded-xl p-4 border border-sage-500/30 bg-sage-500/5 transition-all duration-300 hover:-translate-y-0.5 hover:border-sage-500/50 hover:bg-sage-500/10">

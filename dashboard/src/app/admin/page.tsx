@@ -1,10 +1,23 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from '@mysten/dapp-kit';
 import { Transaction } from '@mysten/sui/transactions';
 import { useToast } from '../components/Toast';
 import { useVaultContext } from '../context/VaultContext';
+
+interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  config?: {
+    maxTradeSize: number;
+    maxPositionBps: number;
+    stopLossBps: number;
+    maxDeploymentBps: number;
+    minTradeInterval: number;
+    maxOpenPositions: number;
+  };
+}
 
 const VAULT_PACKAGE_ID = process.env.NEXT_PUBLIC_VAULT_PACKAGE_ID || '';
 const AGENT_ADDRESS = process.env.NEXT_PUBLIC_AGENT_ADDRESS || '';
@@ -66,6 +79,13 @@ export default function AdminPage() {
   const [creatingVault, setCreatingVault] = useState(false);
   const [showCreateConfirm, setShowCreateConfirm] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+
+  // Smart Setup chat state
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatLoading, setChatLoading] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   // Find AgentCap for the selected vault (query by vault's agent caps)
   const [agentCapId, setAgentCapId] = useState<string | null>(null);
@@ -190,6 +210,60 @@ export default function AdminPage() {
     const interval = setInterval(fetchOnChainData, 30000);
     return () => clearInterval(interval);
   }, [fetchOnChainData]);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages]);
+
+  const sendChatMessage = async (message: string) => {
+    if (!message.trim() || chatLoading) return;
+
+    const userMsg: ChatMessage = { role: 'user', content: message };
+    setChatMessages((prev) => [...prev, userMsg]);
+    setChatInput('');
+    setChatLoading(true);
+
+    try {
+      const res = await fetch('/api/chat-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message,
+          history: chatMessages.map((m) => ({ role: m.role, content: m.content })),
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setChatMessages((prev) => [
+          ...prev,
+          { role: 'assistant', content: data.error || 'Something went wrong.' },
+        ]);
+      } else {
+        setChatMessages((prev) => [
+          ...prev,
+          { role: 'assistant', content: data.reply, config: data.config },
+        ]);
+      }
+    } catch {
+      setChatMessages((prev) => [
+        ...prev,
+        { role: 'assistant', content: 'Could not get a response. Please check your connection and try again.' },
+      ]);
+    }
+    setChatLoading(false);
+  };
+
+  const applyConfig = (config: NonNullable<ChatMessage['config']>) => {
+    setCreateMaxTradeSize(String(config.maxTradeSize));
+    setCreateMaxPositionBps(String(config.maxPositionBps));
+    setCreateStopLossBps(String(config.stopLossBps));
+    setCreateMaxDeploymentBps(String(config.maxDeploymentBps));
+    setCreateMinTradeInterval(String(config.minTradeInterval));
+    setCreateMaxOpenPositions(String(config.maxOpenPositions));
+    setShowAdvanced(true);
+    showToast('Settings applied to form. Review and create your vault.', 'success');
+  };
 
   const handleCreateVault = async () => {
     if (!account || !VAULT_PACKAGE_ID) {
@@ -483,10 +557,12 @@ export default function AdminPage() {
       <div className="space-y-8">
         <h1 className="text-3xl font-bold">Admin Settings</h1>
         <div className="bg-gray-900 rounded-xl p-12 text-center border border-gray-800">
-          <span className="text-4xl mb-4 block">&#x1F512;</span>
+          <svg className="w-12 h-12 mx-auto mb-4 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+          </svg>
           <h2 className="text-xl font-semibold mb-2">Connect Your Wallet</h2>
           <p className="text-gray-400 mb-2 max-w-md mx-auto text-sm">
-            Connect the wallet holding the AdminCap to manage agent settings.
+            Connect the wallet holding the AdminCap to manage vault settings.
           </p>
           <p className="text-gray-600 text-xs">
             Only the vault owner (AdminCap holder) can modify these settings.
@@ -508,11 +584,156 @@ export default function AdminPage() {
         </span>
       </div>
 
+      {/* Smart Setup Assistant */}
+      <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+        <button
+          onClick={() => setChatOpen(!chatOpen)}
+          className="w-full flex items-center justify-between p-5 hover:bg-gray-800/30 transition-colors"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-sage-900/60 flex items-center justify-center">
+              <svg className="w-5 h-5 text-sage-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
+              </svg>
+            </div>
+            <div className="text-left">
+              <h3 className="text-base font-semibold">Smart Setup</h3>
+              <p className="text-xs text-gray-500">Describe your goals and get recommended vault settings</p>
+            </div>
+          </div>
+          <svg className={`w-4 h-4 text-gray-500 transition-transform duration-200 ${chatOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+          </svg>
+        </button>
+
+        {chatOpen && (
+          <div className="border-t border-gray-800">
+            {/* Quick presets */}
+            <div className="px-5 pt-4 pb-2">
+              <p className="text-xs text-gray-500 mb-3">Choose a preset or describe what you want:</p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => sendChatMessage('I want conservative trading with small trades and tight risk controls. Safety is my priority.')}
+                  disabled={chatLoading}
+                  className="px-3.5 py-2 bg-gray-800 border border-gray-700 text-gray-300 rounded-lg text-xs font-medium hover:border-sage-600/50 hover:text-sage-400 transition-all disabled:opacity-50"
+                >
+                  <span className="flex items-center gap-1.5">
+                    <svg className="w-3 h-3 text-green-500" fill="currentColor" viewBox="0 0 24 24"><path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10zm-1-11H7v2h4v4h2v-4h4v-2h-4V7h-2v4z"/></svg>
+                    Conservative
+                  </span>
+                </button>
+                <button
+                  onClick={() => sendChatMessage('I want a balanced moderate approach. Not too risky, not too cautious.')}
+                  disabled={chatLoading}
+                  className="px-3.5 py-2 bg-gray-800 border border-gray-700 text-gray-300 rounded-lg text-xs font-medium hover:border-sage-600/50 hover:text-sage-400 transition-all disabled:opacity-50"
+                >
+                  <span className="flex items-center gap-1.5">
+                    <svg className="w-3 h-3 text-blue-500" fill="currentColor" viewBox="0 0 24 24"><path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10zm-1-11H7v2h4v4h2v-4h4v-2h-4V7h-2v4z"/></svg>
+                    Moderate
+                  </span>
+                </button>
+                <button
+                  onClick={() => sendChatMessage('I want aggressive trading. Maximize opportunities, larger positions, more trades.')}
+                  disabled={chatLoading}
+                  className="px-3.5 py-2 bg-gray-800 border border-gray-700 text-gray-300 rounded-lg text-xs font-medium hover:border-sage-600/50 hover:text-sage-400 transition-all disabled:opacity-50"
+                >
+                  <span className="flex items-center gap-1.5">
+                    <svg className="w-3 h-3 text-orange-500" fill="currentColor" viewBox="0 0 24 24"><path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10zm-1-11H7v2h4v4h2v-4h4v-2h-4V7h-2v4z"/></svg>
+                    Aggressive
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            {/* Conversation */}
+            {chatMessages.length > 0 && (
+              <div className="max-h-96 overflow-y-auto px-5 py-3 space-y-3 scroll-smooth">
+                {chatMessages.map((msg, i) => (
+                  <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div className="max-w-[85%] space-y-2">
+                      <div
+                        className={`rounded-xl px-4 py-3 text-sm leading-relaxed ${
+                          msg.role === 'user'
+                            ? 'bg-sage-600/15 text-gray-200 rounded-br-md'
+                            : 'bg-gray-800/80 text-gray-300 rounded-bl-md'
+                        }`}
+                      >
+                        <p className="whitespace-pre-wrap">{msg.content}</p>
+                      </div>
+                      {msg.config && (
+                        <div className="bg-gray-800/60 border border-gray-700/60 rounded-xl p-4">
+                          <div className="flex items-center justify-between mb-3">
+                            <p className="text-xs font-medium text-gray-300">Suggested Settings</p>
+                            <button
+                              onClick={() => applyConfig(msg.config!)}
+                              className="px-3 py-1 bg-sage-600 hover:bg-sage-700 rounded-md text-xs font-medium transition-colors flex items-center gap-1.5"
+                            >
+                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                              </svg>
+                              Apply to Form
+                            </button>
+                          </div>
+                          <div className="grid grid-cols-3 gap-x-4 gap-y-2">
+                            <ConfigValue label="Max Trade" value={`${msg.config.maxTradeSize} SUI`} />
+                            <ConfigValue label="Position" value={`${(msg.config.maxPositionBps / 100).toFixed(0)}%`} />
+                            <ConfigValue label="Stop-Loss" value={`${(msg.config.stopLossBps / 100).toFixed(0)}%`} />
+                            <ConfigValue label="Deployed" value={`${(msg.config.maxDeploymentBps / 100).toFixed(0)}%`} />
+                            <ConfigValue label="Cooldown" value={`${msg.config.minTradeInterval}s`} />
+                            <ConfigValue label="Max Trades" value={`${msg.config.maxOpenPositions}`} />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {chatLoading && (
+                  <div className="flex justify-start">
+                    <div className="bg-gray-800/80 rounded-xl rounded-bl-md px-4 py-3">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                        <span className="w-1.5 h-1.5 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                        <span className="w-1.5 h-1.5 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <div ref={chatEndRef} />
+              </div>
+            )}
+
+            {/* Input */}
+            <div className="px-5 pb-4 pt-2">
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && sendChatMessage(chatInput)}
+                  placeholder="Describe your trading preferences..."
+                  className="flex-1 bg-gray-800/60 border border-gray-700/80 rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-sage-600/60 focus:ring-1 focus:ring-sage-600/20 transition-all"
+                  disabled={chatLoading}
+                />
+                <button
+                  onClick={() => sendChatMessage(chatInput)}
+                  disabled={chatLoading || !chatInput.trim()}
+                  className="px-4 py-2.5 bg-sage-600 hover:bg-sage-700 disabled:bg-gray-800 disabled:text-gray-600 rounded-xl text-sm font-medium transition-all"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Create Vault Section */}
       <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
         <h3 className="text-lg font-semibold mb-1">Create New Vault</h3>
         <p className="text-sm text-gray-400 mb-4">
-          Set up your AI-managed trading vault. All safety limits are enforced by smart contracts — the agent physically cannot exceed them.
+          Set up your trading vault with on-chain safety limits. All limits are enforced by smart contracts and cannot be exceeded.
         </p>
 
         {/* Defaults summary */}
@@ -678,7 +899,18 @@ export default function AdminPage() {
 
       {!hasVaults && (
         <div className="bg-gray-900 rounded-xl p-8 text-center border border-gray-800">
-          <p className="text-gray-400 text-sm">No vaults found. Create your first vault above.</p>
+          <svg className="w-10 h-10 mx-auto mb-3 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" /></svg>
+          <h3 className="text-lg font-semibold mb-1">No Vaults Yet</h3>
+          <p className="text-gray-400 text-sm mb-1">Create your first vault above to get started.</p>
+          <p className="text-gray-600 text-xs">The agent will be automatically authorized with the safety limits you configure.</p>
+        </div>
+      )}
+
+      {hasVaults && !hasSelectedVault && (
+        <div className="bg-gray-900 rounded-xl p-8 text-center border border-gray-800">
+          <svg className="w-10 h-10 mx-auto mb-3 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M15.042 21.672L13.684 16.6m0 0l-2.51 2.225.569-9.47 5.227 7.917-3.286-.672zM12 2.25V4.5m5.834.166l-1.591 1.591M20.25 10.5H18M7.757 14.743l-1.59 1.59M6 10.5H3.75m4.007-4.243l-1.59-1.59" /></svg>
+          <h3 className="text-lg font-semibold mb-1">Select a Vault</h3>
+          <p className="text-gray-400 text-sm">Use the vault selector in the navigation bar to choose which vault to manage.</p>
         </div>
       )}
 
@@ -978,6 +1210,15 @@ function FormField({
         />
         <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 text-xs">{suffix}</span>
       </div>
+    </div>
+  );
+}
+
+function ConfigValue({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col">
+      <span className="text-[10px] text-gray-500 uppercase tracking-wider">{label}</span>
+      <span className="text-sm text-white font-medium">{value}</span>
     </div>
   );
 }

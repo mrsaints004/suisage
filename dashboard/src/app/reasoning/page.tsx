@@ -116,7 +116,10 @@ export default function ReasoningPage() {
         [blobId]: computedHash === expectedHash ? 'verified' : 'mismatch',
       }));
     } catch {
-      // Leave as pending
+      setHashVerification((prev) => ({
+        ...prev,
+        [blobId]: 'mismatch',
+      }));
     }
   }
 
@@ -172,7 +175,7 @@ export default function ReasoningPage() {
       <div>
         <h1 className="text-3xl font-bold">Reasoning Timeline</h1>
         <p className="text-gray-400 mt-2">
-          Every trading decision the AI makes is stored permanently on Walrus with a SHA-256 hash on-chain for verification.
+          Every trading decision is stored permanently on Walrus with a SHA-256 hash on-chain for verification.
           Click any entry to see the full reasoning.
         </p>
       </div>
@@ -236,7 +239,7 @@ export default function ReasoningPage() {
           <h2 className="text-xl font-semibold mb-2">No Trades Yet</h2>
           <p className="text-gray-400 text-sm max-w-md mx-auto mb-2">
             The agent hasn&apos;t executed any trades yet. Once it starts analyzing the market and trading,
-            every decision will appear here with full AI reasoning.
+            every decision will appear here with full reasoning.
           </p>
           <p className="text-gray-500 text-xs max-w-sm mx-auto">
             The agent checks the market every 60 seconds. Trades only happen when market conditions
@@ -404,8 +407,9 @@ export default function ReasoningPage() {
                                       Mismatch — blob does not match
                                     </span>
                                   ) : (
-                                    <span className="text-xs px-1.5 py-0.5 rounded bg-gray-500/20 text-gray-400">
-                                      Checking...
+                                    <span className="text-xs px-1.5 py-0.5 rounded bg-gray-500/20 text-gray-400 flex items-center gap-1">
+                                      <span className="w-3 h-3 border border-gray-500 border-t-gray-300 rounded-full animate-spin inline-block" />
+                                      Verifying...
                                     </span>
                                   )}
                                 </div>

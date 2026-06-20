@@ -1,4 +1,4 @@
-// ===== Trade Decision (from Claude API) =====
+// ===== Trade Decision =====
 
 export type TradeAction = 'BUY' | 'SELL' | 'HOLD' | 'REBALANCE';
 export type OrderType = 'MARKET' | 'LIMIT';

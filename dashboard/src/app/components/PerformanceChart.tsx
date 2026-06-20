@@ -259,11 +259,6 @@ export function PerformanceChart({ vaultId, packageId }: PerformanceChartProps) 
 
     const sorted = Array.from(allPoints.values()).sort((a, b) => a.timestamp - b.timestamp);
 
-    // If no data at all, generate demo data
-    if (sorted.length === 0) {
-      return generateDemoData(timeRange);
-    }
-
     return sorted;
   }, [tradeEvents, performanceEvents, timeRange]);
 
@@ -464,43 +459,3 @@ function MiniStat({
   );
 }
 
-function generateDemoData(range: TimeRange): NavDataPoint[] {
-  const points: NavDataPoint[] = [];
-  const now = Date.now();
-  let nav = 1.0;
-
-  const count = range === '24h' ? 24 : range === '7d' ? 28 : range === '30d' ? 30 : 60;
-  const intervalMs =
-    range === '24h'
-      ? 3600_000
-      : range === '7d'
-      ? 6 * 3600_000
-      : range === '30d'
-      ? 24 * 3600_000
-      : 12 * 3600_000;
-
-  for (let i = 0; i < count; i++) {
-    const ts = now - (count - i) * intervalMs;
-    const change = (Math.random() - 0.45) * 0.02;
-    nav = Math.max(0.8, nav + change);
-
-    const isTrade = Math.random() > 0.75;
-    const isBuy = Math.random() > 0.5;
-
-    const point: NavDataPoint = {
-      timestamp: ts,
-      time: formatTimestamp(ts, range),
-      navPerShare: parseFloat(nav.toFixed(4)),
-    };
-
-    if (isTrade) {
-      point.tradeType = isBuy ? 'buy' : 'sell';
-      if (isBuy) point.buyMarker = point.navPerShare;
-      else point.sellMarker = point.navPerShare;
-    }
-
-    points.push(point);
-  }
-
-  return points;
-}

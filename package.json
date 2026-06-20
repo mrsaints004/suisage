@@ -5,6 +5,7 @@
   "description": "Autonomous DeFi Agent with Verifiable Reasoning on Sui",
   "scripts": {
     "dev": "npm run dashboard:dev",
+    "dev:all": "npx concurrently -n agent,dashboard -c blue,green \"npm run agent:dev\" \"npm run dashboard:dev\"",
     "start": "npm run dashboard:dev",
     "agent:dev": "npx pnpm --filter agent dev",
     "agent:build": "npx pnpm --filter agent build",
