@@ -40,3 +40,6 @@ package-lock.json
 
 # Walrus local fallback
 .walrus-fallback/
+
+# Agent decisions log (local only — not for deployment)
+.agent-decisions/
