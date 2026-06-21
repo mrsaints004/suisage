@@ -1,5 +1,35 @@
 [
   {
+    "timestamp": 1782052064612,
+    "vaultId": "0xa8e91b14b77bff13d8943549896e0ef58f2dcddc2a493a7331f662f3e4ebe3be",
+    "action": "HOLD",
+    "confidence": 50,
+    "quantity": 0,
+    "price": 0,
+    "reasoning": "Given the current market conditions, I'm holding due to a relatively tight spread of 10 bps and sufficient depth on both sides. The depth imbalance is bid-heavy, but not excessively so. My confidence is moderate at 50%, reflecting the uncertainty in the market. Considering my limited trade history and lack of patterns, I'm being cautious and choosing not to trade.",
+    "marketCondition": "SIDEWAYS",
+    "riskAssessment": "There's a risk of a sudden price movement due to the bid-heavy depth imbalance, but I'm not confident enough to take a trade. I'll continue to monitor the market and reassess my decision.",
+    "midPrice": 0.708735,
+    "spreadBps": 9.999999999998659,
+    "walrusBlobId": "-k5rBUP9bD0eHxw5A6gK3ypYgbtJ8in2x_89lCGfHIA",
+    "guardianApproved": true
+  },
+  {
+    "timestamp": 1782051915016,
+    "vaultId": "0xa8e91b14b77bff13d8943549896e0ef58f2dcddc2a493a7331f662f3e4ebe3be",
+    "action": "HOLD",
+    "confidence": 50,
+    "quantity": 0,
+    "price": 0,
+    "reasoning": "Given the current market state, I'm observing a relatively stable mid price of $0.709830 with a narrow spread of 10.0 bps. The depth is balanced, with 10000 units on both the bid and ask sides. Considering the vault's available balance of 0.1000 SUI, I'm not confident in making a trade. My past performance indicates a lack of trade history, and I'm still building my knowledge base. Therefore, I'm choosing to hold the current position.",
+    "marketCondition": "SIDEWAYS",
+    "riskAssessment": "The risk of a trade in this market condition is moderate, as the price can fluctuate within a narrow range.",
+    "midPrice": 0.70983,
+    "spreadBps": 9.999999999998751,
+    "walrusBlobId": "buDQlUxEbtHrDa1luj6lWxip9I1ilkWihU-PO2KUfTM",
+    "guardianApproved": true
+  },
+  {
     "timestamp": 1782048513023,
     "vaultId": "0xa8e91b14b77bff13d8943549896e0ef58f2dcddc2a493a7331f662f3e4ebe3be",
     "action": "HOLD",
