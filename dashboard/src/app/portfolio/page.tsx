@@ -283,7 +283,7 @@ export default function PortfolioPage() {
         <div className="bg-gray-900 rounded-xl p-12 text-center border border-gray-800">
           <h2 className="text-xl font-semibold mb-2">No Vaults Yet</h2>
           <p className="text-gray-400 mb-4 text-sm max-w-md mx-auto">
-            Create your first vault to start AI-managed trading.
+            Create your first vault to start autonomous trading.
           </p>
           <Link
             href="/admin"
@@ -494,7 +494,7 @@ export default function PortfolioPage() {
               href="/reasoning"
               className="text-sm text-sage-400 hover:text-sage-300 transition-colors"
             >
-              View AI Reasoning &rarr;
+              View Reasoning &rarr;
             </Link>
             <Link
               href="/admin"

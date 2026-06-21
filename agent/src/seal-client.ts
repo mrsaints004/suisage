@@ -45,11 +45,14 @@ export async function initSeal(): Promise<boolean> {
       url: config.suiRpcUrl || getFullnodeUrl(config.suiNetwork),
     });
 
+    const SEAL_AGGREGATOR_URL = process.env.SEAL_AGGREGATOR_URL || 'https://seal-aggregator-mainnet.mystenlabs.com';
+
     sealClient = new SealClient({
       suiClient,
       serverConfigs: [
         {
           objectId: SEAL_KEY_SERVER_OBJECT_ID,
+          aggregatorUrl: SEAL_AGGREGATOR_URL,
           weight: 1,
         },
       ],

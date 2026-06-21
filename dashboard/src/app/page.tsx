@@ -273,7 +273,7 @@ export default function HomePage() {
               </div>
               <h3 className="font-semibold text-sm">MCP Server</h3>
             </div>
-            <p className="text-gray-400 text-xs">Query vault state, market data, reasoning logs, and guardian config from Claude Desktop or any MCP-compatible AI agent.</p>
+            <p className="text-gray-400 text-xs">Query vault state, market data, reasoning logs, and guardian config from Claude Desktop or any MCP-compatible client.</p>
           </div>
         </div>
       </section>

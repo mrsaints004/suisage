@@ -94,7 +94,7 @@ export default function HowItWorksPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Concept
             term="Vault"
-            explanation="A smart contract that holds SUI. Think of it like a shared bank account — multiple people can deposit, and the AI agent is authorized to trade with the funds, but only within strict limits."
+            explanation="A smart contract that holds SUI. Think of it like a shared bank account — multiple people can deposit, and the agent is authorized to trade with the funds, but only within strict limits."
           />
           <Concept
             term="AgentCap"
