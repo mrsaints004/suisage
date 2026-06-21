@@ -69,6 +69,12 @@ async function runVaultCycle(vault_info: ManagedVault, vaultIndex: number, total
     const balanceSui = Number(vaultState.balance) / Number(MIST_PER_SUI);
     console.log(`  Balance: ${balanceSui.toFixed(4)} SUI | Deployed: ${vaultState.deployedAmount} MIST`);
 
+    // Skip vaults with no funds — saves LLM tokens
+    if (Number(vaultState.balance) === 0 && Number(vaultState.deployedAmount) === 0) {
+      console.log(`${vaultLabel} Skipping — vault is empty (no balance, no deployed funds).`);
+      return false;
+    }
+
     // Read on-chain AgentCap and StrategyConfig (used by guardian for limits)
     const onChainConfig: OnChainConfig = {};
     const agentCapState = await readAgentCapState(vault_info.agentCapId);
@@ -100,7 +106,7 @@ async function runVaultCycle(vault_info: ManagedVault, vaultIndex: number, total
         `  Available base: ${position.availableBaseAmount} | Available quote: ${position.availableQuoteAmount}`,
       );
     } catch (e) {
-      console.warn('  Could not read DeepBook position (AccountCap may not be set)');
+      console.warn('  Could not read DeepBook position (BalanceManager may not be set)');
     }
 
     // Step 4: Load memory from Walrus + MemWal
@@ -171,12 +177,44 @@ async function runVaultCycle(vault_info: ManagedVault, vaultIndex: number, total
       }
     }
 
-    // For HOLD decisions, skip Walrus storage and on-chain recording entirely (save gas + Walrus costs)
+    // For HOLD decisions, store reasoning on Walrus (so dashboard shows it) but skip on-chain trade
     if (decision.action === 'HOLD') {
-      console.log(`${vaultLabel} [7-8/9] HOLD — skipping Walrus storage and trade execution (no gas spent)`);
+      console.log(`${vaultLabel} [7/9] Storing HOLD reasoning on Walrus...`);
+      let holdBlobId = 'hold-no-blob';
+      try {
+        const holdLog: ReasoningLog = {
+          version: REASONING_LOG_VERSION,
+          agentId: agentAddress,
+          timestamp: Date.now(),
+          marketSnapshot: market,
+          vaultState: {
+            balance: vaultState.balance.toString(),
+            deployed: vaultState.deployedAmount.toString(),
+            totalShares: vaultState.totalShares.toString(),
+            totalValue: vaultState.totalValue.toString(),
+          },
+          decision,
+          guardianCheck,
+          memoryContext: {
+            recentTradeCount: memory.recentDecisions.length,
+            winRate: memory.performance.winRate,
+            patterns: memory.patterns,
+            lastAction: memory.recentDecisions.length > 0
+              ? memory.recentDecisions[memory.recentDecisions.length - 1].action
+              : null,
+          },
+          executionResult: undefined,
+        };
+        holdBlobId = await storeReasoning(holdLog);
+        console.log(`  Walrus blob ID: ${holdBlobId}`);
+      } catch (walrusErr) {
+        console.warn(`  Walrus storage failed for HOLD (non-fatal):`, walrusErr);
+      }
 
-      // Still notify Telegram and track locally
-      await notifyTrade(decision, 'hold-no-blob', undefined);
+      console.log(`${vaultLabel} [8/9] HOLD — no trade execution (no gas spent)`);
+
+      // Notify Telegram and track locally
+      await notifyTrade(decision, holdBlobId, undefined);
       recentDecisions.push(decision);
       if (recentDecisions.length > 10) recentDecisions.shift();
 

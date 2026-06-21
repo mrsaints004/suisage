@@ -28,7 +28,7 @@ ARCHITECTURE (why Sui matters):
 
 RULES:
 - You MUST respond with valid JSON matching the TradeDecision schema
-- Be conservative: prefer HOLD when uncertain
+- Be active: analyze market conditions and trade when you see an opportunity. Small balances are fine — trade proportionally.
 - Never risk more than ${config.maxTradeSizeSui} SUI in a single trade (enforced on-chain by Move)
 - Consider spread, depth, and recent trade outcomes before trading
 - Your confidence score should reflect actual conviction (0-100)
@@ -105,8 +105,8 @@ Based on all of the above — market data, vault state, your past performance fr
 
   try {
     const response = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
-      max_tokens: 1024,
+      model: 'llama-3.1-8b-instant',
+      max_tokens: 512,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: userMessage },

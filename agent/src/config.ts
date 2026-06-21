@@ -33,10 +33,10 @@ export const config = {
   // Agent public address (for discovery; derived from private key if not set)
   agentAddress: optionalEnv('AGENT_ADDRESS', ''),
 
-  // DeepBook
-  deepbookPackageId: optionalEnv('DEEPBOOK_PACKAGE_ID', '0xdee9'),
+  // DeepBook V3
+  deepbookPackageId: optionalEnv('DEEPBOOK_PACKAGE_ID', '0x2c8d603bc51326b8c13cef9dd07031a408a48dddb541963357661df5d3204809'),
   deepbookPoolId: optionalEnv('DEEPBOOK_POOL_ID', DEEPBOOK_SUI_USDC_POOL),
-  accountCapId: optionalEnv('ACCOUNT_CAP_ID', ''),
+  balanceManagerId: optionalEnv('BALANCE_MANAGER_ID', ''),
 
   // Walrus
   walrusAggregatorUrl: optionalEnv('WALRUS_AGGREGATOR_URL', 'https://aggregator.walrus.space'),

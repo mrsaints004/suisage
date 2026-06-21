@@ -13,7 +13,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
     "@mysten-incubation/memwal": "^0.0.7",
-    "@mysten/deepbook": "^0.9.0",
+    "@mysten/deepbook-v3": "^1.5.1",
     "@mysten/seal": "^1.1.3",
     "@mysten/sui": "^1.21.0",
     "@suisage/shared": "workspace:*",

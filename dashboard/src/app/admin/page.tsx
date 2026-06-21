@@ -849,11 +849,16 @@ export default function AdminPage() {
 
         <button
           onClick={() => setShowCreateConfirm(true)}
-          disabled={creatingVault || isPending || !VAULT_PACKAGE_ID}
+          disabled={creatingVault || isPending || !VAULT_PACKAGE_ID || hasVaults}
           className="px-6 py-3 bg-sage-600 hover:bg-sage-700 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg font-medium transition-colors text-sm"
         >
-          {creatingVault ? <Spinner text="Creating Vault..." /> : 'Create Vault'}
+          {creatingVault ? <Spinner text="Creating Vault..." /> : hasVaults ? 'Vault Already Created' : 'Create Vault'}
         </button>
+        {hasVaults && (
+          <p className="text-xs text-gray-500 mt-2">
+            You already have a vault. Deposit SUI into your existing vault from the Portfolio page.
+          </p>
+        )}
 
         {AGENT_ADDRESS && (
           <p className="text-xs text-gray-500 mt-3">
