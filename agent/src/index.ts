@@ -28,6 +28,7 @@ import {
 } from './memwal-client.js';
 import { initSeal, isSealEnabled, getSealStatus } from './seal-client.js';
 import { discoverManagedVaults } from './vault-discovery.js';
+import { logDecision } from './decisions-log.js';
 import { REASONING_LOG_VERSION, MIST_PER_SUI } from '@suisage/shared';
 import type { TradeDecision, ReasoningLog, GuardianCheck, OnChainConfig, ManagedVault } from '@suisage/shared';
 
@@ -213,6 +214,9 @@ async function runVaultCycle(vault_info: ManagedVault, vaultIndex: number, total
 
       console.log(`${vaultLabel} [8/9] HOLD — no trade execution (no gas spent)`);
 
+      // Log to shared decisions file (so dashboard can show HOLDs)
+      logDecision(decision, market, vault_info.vaultId, holdBlobId, guardianCheck.approved);
+
       // Notify Telegram and track locally
       await notifyTrade(decision, holdBlobId, undefined);
       recentDecisions.push(decision);
@@ -364,6 +368,9 @@ async function runVaultCycle(vault_info: ManagedVault, vaultIndex: number, total
       console.log(`${vaultLabel} [9/9] DeepBook Predict not configured (optional testnet feature)`);
     }
 
+    // Log to shared decisions file (for dashboard)
+    logDecision(decision, market, vault_info.vaultId, walrusBlobId, guardianCheck.approved, txDigest);
+
     // Notify via Telegram
     await notifyTrade(decision, walrusBlobId, txDigest);
 
@@ -421,13 +428,13 @@ async function runCycle() {
   console.log(`\n[SuiSage] Cycle #${cycleCount} complete (${managedVaults.length} vaults, consecutive holds: ${consecutiveHolds}).`);
 }
 
-/** Compute adaptive interval: base interval * backoff factor (capped at 5x). */
+/** Compute adaptive interval: fast when trading, backs off during HOLDs to save API tokens. */
 function getAdaptiveInterval(): number {
   const base = config.loopIntervalMs;
-  if (consecutiveHolds <= 2) return base;           // Normal pace for first 2 holds
-  if (consecutiveHolds <= 5) return base * 2;       // 2x after 3-5 consecutive holds
-  if (consecutiveHolds <= 10) return base * 3;      // 3x after 6-10
-  return Math.min(base * 5, 5 * 60 * 1000);        // 5x, capped at 5 minutes
+  if (consecutiveHolds <= 2) return base;                    // 2 min — just traded or starting up
+  if (consecutiveHolds <= 5) return Math.max(base * 2, 4 * 60 * 1000);   // 4 min
+  if (consecutiveHolds <= 10) return Math.max(base * 4, 8 * 60 * 1000);  // 8 min
+  return Math.max(base * 7, 15 * 60 * 1000);                // 15 min — long idle
 }
 
 async function main() {

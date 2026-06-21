@@ -110,14 +110,14 @@ export async function executeTrade(
     if (decision.action === 'SELL') {
       // Swap SUI for USDC: swap_exact_base_for_quote
       const [suiCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(quantityMist)]);
+      const deepCoinIn = tx.moveCall({ target: '0x2::coin::zero', typeArguments: ['0xdeeb7a4662eec9f2f3def03fb937a663dddaa2e215b8078a284d026b7946c270::deep::DEEP'] });
 
       const [baseCoinOut, quoteCoinOut, deepCoinOut] = tx.moveCall({
         target: `${config.deepbookPackageId}::pool::swap_exact_base_for_quote`,
         arguments: [
           tx.object(poolId),
           suiCoin,
-          tx.moveCall({ target: '0x2::coin::zero', typeArguments: [USDC_COIN_TYPE] }),
-          tx.moveCall({ target: '0x2::coin::zero', typeArguments: ['0xdeeb7a4662eec9f2f3def03fb937a663dddaa2e215b8078a284d026b7946c270::deep::DEEP'] }),
+          deepCoinIn,
           tx.pure.u64(0), // min quote out
           tx.object('0x6'), // clock
         ],
@@ -193,13 +193,13 @@ export async function executeAtomicTradePTB(
     // --- Step 1: Swap on DeepBook V3 ---
     if (decision.action === 'SELL') {
       const [suiCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(quantityMist)]);
+      const deepCoinIn = tx.moveCall({ target: '0x2::coin::zero', typeArguments: ['0xdeeb7a4662eec9f2f3def03fb937a663dddaa2e215b8078a284d026b7946c270::deep::DEEP'] });
       const [baseCoinOut, quoteCoinOut, deepCoinOut] = tx.moveCall({
         target: `${config.deepbookPackageId}::pool::swap_exact_base_for_quote`,
         arguments: [
           tx.object(poolId),
           suiCoin,
-          tx.moveCall({ target: '0x2::coin::zero', typeArguments: [USDC_COIN_TYPE] }),
-          tx.moveCall({ target: '0x2::coin::zero', typeArguments: ['0xdeeb7a4662eec9f2f3def03fb937a663dddaa2e215b8078a284d026b7946c270::deep::DEEP'] }),
+          deepCoinIn,
           tx.pure.u64(0),
           tx.object('0x6'),
         ],
@@ -299,13 +299,17 @@ export async function executeVaultTradePTB(
     // --- Step 2: Swap on DeepBook V3 ---
     if (decision.action === 'SELL') {
       // Swap SUI for USDC
+      // DeepBook V3 swap_exact_base_for_quote signature:
+      // (pool: &mut Pool<B,Q>, base_coin: Coin<B>, deep_coin: Coin<DEEP>, min_quote: u64, clock: &Clock)
+      // Returns: (Coin<B>, Coin<Q>, Coin<DEEP>)
+      const deepCoinIn = tx.moveCall({ target: '0x2::coin::zero', typeArguments: ['0xdeeb7a4662eec9f2f3def03fb937a663dddaa2e215b8078a284d026b7946c270::deep::DEEP'] });
+
       const [baseCoinOut, quoteCoinOut, deepCoinOut] = tx.moveCall({
         target: `${config.deepbookPackageId}::pool::swap_exact_base_for_quote`,
         arguments: [
           tx.object(poolId),
           tradeCoin,
-          tx.moveCall({ target: '0x2::coin::zero', typeArguments: [USDC_COIN_TYPE] }),
-          tx.moveCall({ target: '0x2::coin::zero', typeArguments: ['0xdeeb7a4662eec9f2f3def03fb937a663dddaa2e215b8078a284d026b7946c270::deep::DEEP'] }),
+          deepCoinIn,
           tx.pure.u64(0), // min quote out
           tx.object('0x6'),
         ],
@@ -325,8 +329,7 @@ export async function executeVaultTradePTB(
       // Transfer USDC proceeds and DEEP refund to agent
       tx.transferObjects([quoteCoinOut, deepCoinOut], agentAddress);
     } else if (decision.action === 'BUY') {
-      // For BUY, we'd swap USDC for SUI — but the vault holds SUI
-      // so we return the withdrawn SUI as-is (BUY not supported from SUI vault)
+      // Vault holds SUI — can't buy more SUI. Return funds and record as a no-op.
       tx.moveCall({
         target: `${config.vaultPackageId}::agent_auth::return_from_trading`,
         arguments: [
@@ -335,8 +338,7 @@ export async function executeVaultTradePTB(
           tradeCoin,
         ],
       });
-
-      return { success: false, error: 'BUY not supported — vault holds SUI, cannot buy more SUI' };
+      // Still record the decision on-chain for transparency
     }
 
     // --- Step 3: Record trade on-chain with reasoning hash ---

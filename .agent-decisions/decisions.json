@@ -1,0 +1,48 @@
+[
+  {
+    "timestamp": 1782048513023,
+    "vaultId": "0xa8e91b14b77bff13d8943549896e0ef58f2dcddc2a493a7331f662f3e4ebe3be",
+    "action": "HOLD",
+    "confidence": 60,
+    "quantity": 0,
+    "price": 0,
+    "reasoning": "Given the current market conditions, I'm observing a relatively stable spread of 10 bps and sufficient depth on both sides. The vault's available balance is 0.1000 SUI, but considering the max trade size constraint of 10 SUI, I'm cautious about initiating a trade. Additionally, my past performance shows an insufficient trade history for pattern detection, and I don't want to risk making a decision based on limited data. Therefore, I'm choosing to HOLD the current position.",
+    "marketCondition": "SIDEWAYS",
+    "riskAssessment": "I'm aware that holding a position in a sideways market may not be optimal, but I'm prioritizing caution due to the limited trade history and the risk of making a suboptimal decision.",
+    "midPrice": 0.708655,
+    "spreadBps": 9.999999999999252,
+    "walrusBlobId": "rV8mFwjSf14QOBLdjGIUBTXKrZjvd-dp4e1HvoIlu88",
+    "guardianApproved": true
+  },
+  {
+    "timestamp": 1782048371324,
+    "vaultId": "0xa8e91b14b77bff13d8943549896e0ef58f2dcddc2a493a7331f662f3e4ebe3be",
+    "action": "HOLD",
+    "confidence": 80,
+    "quantity": 0,
+    "price": 0,
+    "reasoning": "Current market conditions indicate a relatively stable environment with a narrow spread of 10.0 bps and sufficient depth on both sides. The mid price of $0.708355 is close to the best bid and ask, suggesting a balanced market. Given the vault's available balance of 0.1000 SUI and the current total value of 0.1000 SUI, I do not see a compelling reason to trade. My confidence in this decision is 80% due to the stable market conditions and the lack of clear trading opportunities.",
+    "marketCondition": "SIDEWAYS",
+    "riskAssessment": "The risk of trading in this market is low, but I must remain cautious and adapt to changing conditions.",
+    "midPrice": 0.708355,
+    "spreadBps": 9.999999999999913,
+    "walrusBlobId": "w5_gHI0d9_mtaGdkMc2nVKHa6BcbUuyphbSWV0l143k",
+    "guardianApproved": true
+  },
+  {
+    "timestamp": 1782048223965,
+    "vaultId": "0xa8e91b14b77bff13d8943549896e0ef58f2dcddc2a493a7331f662f3e4ebe3be",
+    "action": "SELL",
+    "confidence": 72,
+    "quantity": 0.01,
+    "price": 0.708715,
+    "reasoning": "Market analysis indicates a sideways trend with SUI trading at $0.7087. The spread is tight at 10.0 bps with sufficient depth on both sides (10000 bid / 10000 ask). Initiating a conservative sell of 0.01 SUI to establish a USDC position and capture the current price level. The vault has 0.1000 SUI available. With no prior trade history, starting with a small position to build data for future analysis. On-chain Guardian enforcement and Walrus reasoning storage provide full transparency for this trade.",
+    "marketCondition": "SIDEWAYS",
+    "riskAssessment": "Low risk — small position size (0.01 SUI, 10.0% of vault). Tight spread reduces slippage. Main risk is price reversal, but position size limits downside.",
+    "midPrice": 0.708715,
+    "spreadBps": 10.000000000000373,
+    "walrusBlobId": "UIao2Ld4RdtHgmtJAFBHdkkCMN0VyvEiqfTH74JPfmE",
+    "txDigest": "F3K84LKyjN7Z1HM14XASLEXXBoyDJkWbQ8wirzD9ec8Q",
+    "guardianApproved": true
+  }
+]
